@@ -20,7 +20,13 @@ from PySide6.QtGui import QDesktopServices
 from ..core.errors import SaleHunterError, SourceBlocked
 from ..core.logging import get_logger
 from ..core.models import Money, Watch
-from ..core.sale_calendar import SaleTier, current_tier, next_window
+from ..core.sale_calendar import (
+    SaleTier,
+    current_tier,
+    is_elevated,
+    is_peak,
+    next_window,
+)
 from ..core.settings import AppSettings
 from ..services.notifier import Notifier
 from ..services.scanner import Scanner, ScanResult
@@ -144,8 +150,32 @@ class AppBridge(QObject):
 
     @Property(int, notify=saleStateChanged)
     def tierLevel(self) -> int:
-        """0–4, so QML can scale the header's intensity without knowing the tier names."""
+        """0–4, for scaling a *continuous* visual intensity (see `Theme.tierGlow`).
+
+        Do not branch on it. A ramp over the ordinal degrades gracefully when a tier is
+        inserted — the glow shifts a little — whereas `tierLevel >= 3` silently changes which
+        days count as loud. Anything categorical belongs on `tierIsPeak` or `tierTone`.
+        """
         return int(current_tier(datetime.now(UTC)))
+
+    @Property(bool, notify=saleStateChanged)
+    def tierIsPeak(self) -> bool:
+        """Is a big campaign window running right now? Drives the header's emphasis."""
+        return is_peak(current_tier(datetime.now(UTC)))
+
+    @Property(str, notify=saleStateChanged)
+    def tierTone(self) -> str:
+        """The badge tone for the current tier, as a name the Badge component understands.
+
+        The mapping tier → emphasis is made here, once, rather than in QML. A view comparing
+        `tierLevel >= 3` would be encoding which enum members are the loud ones, and adding a
+        tier anywhere below MEGA would silently shift every such comparison — rendering 12.12
+        as a neutral grey badge on the one day the app exists for.
+        """
+        tier = current_tier(datetime.now(UTC))
+        if is_peak(tier):
+            return "accent"
+        return "caution" if is_elevated(tier) else "neutral"
 
     @Property(str, notify=saleStateChanged)
     def nextSaleText(self) -> str:

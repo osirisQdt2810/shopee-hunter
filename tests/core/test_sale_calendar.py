@@ -8,12 +8,16 @@ import pytest
 
 from shopee_hunter.core.sale_calendar import (
     FLASH_SALE_HOURS,
+    PEAK_TIERS,
+    SCAN_INTERVAL_SECONDS,
     STOREFRONT_TZ,
     SaleTier,
     active_windows,
     classify_day,
     current_tier,
     day_windows,
+    is_elevated,
+    is_peak,
     next_window,
     recommended_interval,
 )
@@ -140,3 +144,41 @@ class TestNextWindow:
             next_window(ict(2026, 5, 20), min_tier=SaleTier.MEGA, horizon_days=1)
             is None
         )
+
+
+class TestTierClassification:
+    """Which tiers count as "loud", asked by name rather than by ordinal.
+
+    The UI needs this answer to decide how much to shout. It lives in core because "is 12.12
+    a big day" is a fact about Shopee's calendar, not a styling choice — and because a view
+    asking it as `tierLevel >= 3` encodes the enum's current numbering, so inserting a tier
+    silently reclassifies every day.
+    """
+
+    @pytest.mark.parametrize(
+        ("tier", "peak"),
+        [
+            (SaleTier.QUIET, False),
+            (SaleTier.FLASH_SLOT, False),
+            (SaleTier.PAYDAY, False),
+            (SaleTier.DOUBLE_DATE, True),
+            (SaleTier.MEGA, True),
+        ],
+    )
+    def test_peak_is_the_campaign_tiers(self, tier: SaleTier, peak: bool) -> None:
+        assert is_peak(tier) is peak
+
+    @pytest.mark.parametrize("tier", list(SaleTier))
+    def test_only_a_quiet_day_is_not_elevated(self, tier: SaleTier) -> None:
+        assert is_elevated(tier) is (tier is not SaleTier.QUIET)
+
+    def test_every_tier_is_classified(self) -> None:
+        """A tier added later must be given an answer here, not inherit one from its number."""
+        assert set(SaleTier) >= PEAK_TIERS
+        assert {tier for tier in SaleTier if is_peak(tier)} == PEAK_TIERS
+
+    def test_peak_days_scan_harder_than_quiet_ones(self) -> None:
+        """The classification has to agree with the cadence it claims to describe."""
+        slowest_peak = max(SCAN_INTERVAL_SECONDS[tier] for tier in PEAK_TIERS)
+
+        assert slowest_peak < SCAN_INTERVAL_SECONDS[SaleTier.QUIET]

@@ -23,7 +23,7 @@ Column {
         anchors.horizontalCenter: parent.horizontalCenter
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 52
+        font.pixelSize: Theme.fontGlyph
         opacity: 0.6
         text: empty.glyph
 

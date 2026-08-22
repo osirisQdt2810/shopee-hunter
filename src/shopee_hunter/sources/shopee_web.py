@@ -110,7 +110,11 @@ class ShopeeWebSource(SourceAdapter):
         * 403/429 → blocked (their anti-bot, or our own pace);
         * an HTML body → blocked (a captcha/interstitial page, not JSON);
         * 5xx / timeout / connection error → unavailable (retryable).
+
+        Charges the rate limiter first: a paginated search calls this once per page, and each
+        call is a real request that has to pay for itself (ADR-007).
         """
+        await self._throttle(path)
         client = await self._get_client()
         try:
             response = await client.get(

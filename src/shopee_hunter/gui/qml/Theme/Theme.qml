@@ -44,6 +44,11 @@ QtObject {
     // ----------------------------------------------------------------- motion
     readonly property int durFast: Math.round(140 * effectiveMotion)
     readonly property int durSlow: Math.round(420 * effectiveMotion)
+
+    // One sweep of a looping progress shimmer. Clamped like durAmbient rather than scaled to
+    // zero: this drives an infinite loop, and a zero-duration NumberAnimation on a loop spins
+    // the frame timer instead of stopping. Call sites gate on effectiveMotion to stop it.
+    readonly property int durSweep: Math.round(1200 * Math.max(effectiveMotion, 0.001))
     readonly property int easeAmbient: Easing.InOutSine
     readonly property int easeEnter: Easing.OutBack
     readonly property int easeExit: Easing.InCubic
@@ -58,6 +63,10 @@ QtObject {
     // A stack, not one family: the same declaration has to resolve on macOS and Windows, and
     // a missing family silently falls back to something with different metrics.
     readonly property string fontFamily: Qt.platform.os === "windows" ? "Segoe UI, Inter, Helvetica Neue, Arial" : "SF Pro Text, Inter, Helvetica Neue, Arial"
+
+    // The oversized glyph an empty state leads with. Larger than fontHero because it is an
+    // illustration rather than text, and it must not track a heading size that gets retuned.
+    readonly property int fontGlyph: 52
     readonly property int fontHero: 38
     readonly property int fontLg: 15
     readonly property int fontMd: 13

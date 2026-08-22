@@ -184,6 +184,9 @@ class ShopeeBrowserSource(SourceAdapter):
             SourceAuthRequired: The page redirected to a login wall.
             SourceUnavailable: Navigation itself failed.
         """
+        # A page load is an outbound request like any other, and `_do_search` calls this once
+        # per page — so the token is charged here, not once for the whole search (ADR-007).
+        await self._throttle(page_path)
         page = await self._ensure_page()
         loop = asyncio.get_running_loop()
         captured: asyncio.Future[dict[str, Any]] = loop.create_future()

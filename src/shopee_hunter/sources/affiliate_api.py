@@ -106,6 +106,11 @@ class AffiliateApiSource(SourceAdapter):
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=30.0)
 
+        # One token per POST. `_do_search` keeps paging until it has `query.limit` items, so
+        # charging once per operation would let a single search fire an unbounded burst
+        # (ADR-007).
+        await self._throttle("affiliate query")
+
         payload = json.dumps(
             {"query": query, "variables": variables}, separators=(",", ":")
         )
@@ -182,10 +187,40 @@ class AffiliateApiSource(SourceAdapter):
             ) from exc
 
         currency = Currency(self.settings.storefront.currency)
-        try:
-            rate = int(float(node.get("priceDiscountRate") or 0))
-        except (TypeError, ValueError):
+        # An ABSENT rate means "no claim" and is legitimate. A rate that is present but
+        # unparseable means the wire format moved, and must say so: defaulting it to 0 sets
+        # `claimed_discount_pct=0` on every item, which silently disables CLAIM_INFLATED
+        # detection and then filters the whole page out against `scan.min_discount_pct` — the
+        # app reports "no deals" mid-sale while the adapter is returning a full page.
+        rate_raw = node.get("priceDiscountRate")
+        if rate_raw is None or rate_raw == "":
             rate = 0
+        else:
+            try:
+                rate = int(float(rate_raw))
+            except (TypeError, ValueError) as exc:
+                raise ParseError(
+                    f"affiliate node {item_id}: priceDiscountRate is not numeric "
+                    f"({rate_raw!r})",
+                    source=self.id,
+                ) from exc
+
+        # Same absent-vs-unreadable split as the rate above. Truthiness is not the test: an
+        # empty list is not "no rating", it is a field that changed shape.
+        rating_raw = node.get("ratingStar")
+        try:
+            rating = (
+                None if rating_raw is None or rating_raw == "" else float(rating_raw)
+            )
+        except (TypeError, ValueError) as exc:
+            # Outside a typed error this escapes the seam entirely: SourceChain only catches
+            # SourceError, so a bare ValueError here would skip the fallback to the next
+            # adapter and surface as an untyped traceback in the GUI.
+            raise ParseError(
+                f"affiliate node {item_id}: ratingStar is not numeric ({rating_raw!r})",
+                source=self.id,
+            ) from exc
+
         before = (
             Money(round(price / (1 - rate / 100)), currency) if 0 < rate < 100 else None
         )
@@ -197,7 +232,7 @@ class AffiliateApiSource(SourceAdapter):
             price=Money(price, currency),
             price_before_discount=before,
             claimed_discount_pct=max(0, min(rate, 100)),
-            rating=float(node["ratingStar"]) if node.get("ratingStar") else None,
+            rating=rating,
             # The affiliate schema exposes no rating count; 0 means the deal engine treats
             # the rating as not-yet-credible, which is the correct conservative reading.
             rating_count=0,

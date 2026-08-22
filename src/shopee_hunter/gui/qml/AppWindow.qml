@@ -201,7 +201,7 @@ Window {
                                         anchors.verticalCenter: parent.verticalCenter
                                         color: root.bridge && root.bridge.busy ? Theme.caution : Theme.positive
                                         height: 7
-                                        radius: 4
+                                        radius: Theme.radiusPill
                                         width: 7
 
                                         SequentialAnimation on opacity {
@@ -286,7 +286,7 @@ Window {
                                 height: parent.height
                                 hint: root.bridge ? root.bridge.nextSaleText : ""
                                 label: "sale state"
-                                tint: root.bridge && root.bridge.tierLevel >= 3 ? Theme.accent : Theme.info
+                                tint: root.bridge && root.bridge.tierIsPeak ? Theme.accent : Theme.info
                                 value: root.bridge ? root.bridge.tierLabel : ""
                                 width: 260
                             }
@@ -387,7 +387,7 @@ Window {
                     color: Theme.textMuted
                     height: 3
                     opacity: 0.5
-                    radius: 1.5
+                    radius: Theme.radiusPill
                     width: 3
                     x: 12 - index * 4
                     y: 12

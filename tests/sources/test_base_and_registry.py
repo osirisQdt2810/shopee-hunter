@@ -79,6 +79,96 @@ def _skip_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(asyncio, "sleep", instant)
 
 
+class CountingBucket(AsyncTokenBucket):
+    """A bucket that never makes anyone wait but records every token taken."""
+
+    def __init__(self) -> None:
+        super().__init__(rate=1e6, burst=1000)
+        self.acquisitions = 0
+
+    async def acquire(self, cost: float = 1.0) -> float:
+        self.acquisitions += 1
+        return await super().acquire(cost)
+
+
+class PagingAdapter(SourceAdapter):
+    """An adapter whose one ``search`` issues several requests, like the real ones do."""
+
+    id = "paging"
+    label = "paging"
+
+    def __init__(self, settings, *, limiter=None, pages=3):
+        super().__init__(settings, limiter=limiter)
+        self.pages = pages
+
+    async def _do_search(self, query: SearchQuery) -> list[Product]:
+        for page in range(self.pages):
+            await self._throttle(f"page {page}")
+        return []
+
+    async def _do_fetch_item(self, item_id: int, shop_id: int) -> Product:
+        raise SourceUnavailable("not implemented in the test double", source=self.id)
+
+
+class TestRateLimitIsPerRequest:
+    """ADR-007: every outbound request pays a token, not every *operation*.
+
+    The bug this pins was invisible at the default settings. `_guarded` took one token for a
+    whole search, but a search pages: `items_per_watch = 600` makes `page_count == 10`, so
+    one token bought ten back-to-back requests — about 10 req/s against a bucket configured
+    for 0.5 with a burst of 4. At the default of 60 the loop runs once and the bypass leaves
+    no trace, which is why only a multi-page test can catch it.
+    """
+
+    async def test_each_page_pays_its_own_token(self, settings, query):
+        limiter = CountingBucket()
+        adapter = PagingAdapter(settings, limiter=limiter, pages=5)
+
+        await adapter.search(query)
+
+        assert limiter.acquisitions == 5
+
+    async def test_an_operation_that_makes_no_request_pays_nothing(
+        self, settings, query
+    ):
+        """The offline fixture source must not be charged for work it does locally."""
+        limiter = CountingBucket()
+        adapter = PagingAdapter(settings, limiter=limiter, pages=0)
+
+        await adapter.search(query)
+
+        assert limiter.acquisitions == 0
+
+    async def test_a_retried_operation_pays_again(
+        self, settings, query, product_factory, monkeypatch
+    ):
+        """A retry re-enters the request path, so it must not ride the first token."""
+        _skip_backoff(monkeypatch)
+        limiter = CountingBucket()
+        adapter = RecordingAdapter(
+            settings,
+            limiter=limiter,
+            behaviour=[
+                SourceUnavailable("boom", source="recording"),
+                [product_factory()],
+            ],
+        )
+
+        # RecordingAdapter stands in for a transport, so it charges the bucket the way a real
+        # request helper does.
+        original = adapter._do_search
+
+        async def counted(q):
+            await adapter._throttle("search")
+            return await original(q)
+
+        monkeypatch.setattr(adapter, "_do_search", counted)
+
+        await adapter.search(query)
+
+        assert limiter.acquisitions == 2
+
+
 class TestGuardPolicy:
     async def test_a_transport_failure_is_retried(
         self, settings, query, product_factory, monkeypatch

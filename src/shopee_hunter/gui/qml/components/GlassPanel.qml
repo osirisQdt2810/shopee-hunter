@@ -51,7 +51,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.topMargin: 1
         height: 1
-        radius: 1
+        radius: Theme.radiusPill
         width: parent.width - parent.radius
 
         gradient: Gradient {

@@ -144,7 +144,7 @@ Item {
                 Rectangle {
                     color: control.flat ? Theme.accent : Theme.textOnAccent
                     height: 4
-                    radius: 2
+                    radius: Theme.radiusPill
                     transformOrigin: Item.Center
                     width: 4
                     x: parent.width / 2 - 2

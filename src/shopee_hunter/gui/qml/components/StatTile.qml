@@ -25,7 +25,7 @@ GlassPanel {
         anchors.top: parent.top
         color: tile.tint
         opacity: 0.85
-        radius: 2
+        radius: Theme.radiusPill
         width: 3
     }
     Column {

@@ -127,7 +127,7 @@ Item {
                         Rectangle {
                             color: Theme.textPrimary
                             height: 16
-                            radius: 8
+                            radius: Theme.radiusPill
                             width: 16
                             x: officialToggle.checked ? officialToggle.width - width - 3 : 3
                             y: 3

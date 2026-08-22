@@ -53,9 +53,9 @@ Item {
                     spacing: Theme.spacingSm
 
                     Badge {
-                        filled: view.bridge ? view.bridge.tierLevel >= 3 : false
+                        filled: view.bridge ? view.bridge.tierIsPeak : false
                         text: view.bridge ? view.bridge.tierLabel : ""
-                        tone: (view.bridge && view.bridge.tierLevel >= 3) ? "accent" : (view.bridge && view.bridge.tierLevel >= 1) ? "caution" : "neutral"
+                        tone: view.bridge ? view.bridge.tierTone : "neutral"
                     }
                     Badge {
                         text: view.bridge ? view.bridge.storefront : ""
@@ -87,7 +87,7 @@ Item {
                 border.width: 2
                 color: "transparent"
                 height: 96
-                radius: 48
+                radius: Theme.radiusPill
                 width: 96
 
                 SequentialAnimation on opacity {
@@ -189,7 +189,7 @@ Item {
             anchors.margins: 1
             anchors.top: parent.top
             color: rhythm.tint
-            radius: 2
+            radius: Theme.radiusPill
             width: 3
         }
         Column {

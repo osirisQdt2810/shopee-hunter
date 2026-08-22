@@ -35,7 +35,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         color: Theme.accent
         height: item.current ? parent.height * 0.55 : 0
-        radius: 2
+        radius: Theme.radiusPill
         width: 3
 
         Behavior on height {

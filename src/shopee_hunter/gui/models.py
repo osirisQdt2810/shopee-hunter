@@ -98,6 +98,11 @@ class DealListModel(QAbstractListModel):
     WatchRole = Qt.UserRole + 20
     FlashRole = Qt.UserRole + 21
 
+    # The engine's verdict on the seller's claim, as a boolean the view can paint directly.
+    # Without it a card has to compare `claimedDiscount` against `discount` itself, which
+    # means re-implementing CLAIM_INFLATION_TOLERANCE_PCT in QML where no test can see it.
+    ClaimInflatedRole = Qt.UserRole + 22
+
     countChanged = Signal()
 
     _ROLE_NAMES: ClassVar[dict[int, bytes]] = {
@@ -122,6 +127,7 @@ class DealListModel(QAbstractListModel):
         HistoryRole: b"history",
         WatchRole: b"watchId",
         FlashRole: b"flash",
+        ClaimInflatedRole: b"claimInflated",
     }
 
     def __init__(self, parent: Optional[Any] = None) -> None:
@@ -196,6 +202,8 @@ class DealListModel(QAbstractListModel):
             return deal.watch_id or ""
         if role == self.FlashRole:
             return product.is_flash_sale
+        if role == self.ClaimInflatedRole:
+            return DealFlag.CLAIM_INFLATED in deal.flags
         return None
 
     # -- population -------------------------------------------------------------

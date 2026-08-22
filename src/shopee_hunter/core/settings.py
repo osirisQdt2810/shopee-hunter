@@ -184,6 +184,21 @@ class ScanSettings(PersistedModel):
 
     items_per_watch: int = 60
     min_discount_pct: float = 20.0
+
+    @field_validator("items_per_watch")
+    @classmethod
+    def _bounded_page_span(cls, value: int) -> int:
+        """Cap the pages one watch may request.
+
+        `SearchQuery.page_count` is derived from this, and each page is a separate request.
+        The limiter charges per request so a large value can no longer burst past the bucket
+        — it just makes one watch slow, and starves the others behind it. 300 is five pages,
+        which is already more than a person reads.
+        """
+        if not 1 <= value <= 300:
+            raise ValueError("items_per_watch must be between 1 and 300")
+        return value
+
     genuine_only: bool = True
     history_lookback_days: int = 90
     auto_scan: bool = True

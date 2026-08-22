@@ -120,12 +120,35 @@ class SourceAdapter(abc.ABC):
         raise NotImplementedError
 
     # -- the shared machinery ---------------------------------------------------
+    async def _throttle(self, what: str) -> None:
+        """Pay one token for one outbound request. Every request path must call this.
+
+        Deliberately per-REQUEST rather than per-operation (ADR-007). ``_guarded`` used to
+        take the single token for a whole ``search``, but a search is not one request: both
+        the web and browser adapters loop over ``query.page_count`` pages, and the affiliate
+        adapter pages until it has ``query.limit`` items. One token then bought ten HTTP
+        requests fired back to back — roughly 10 req/s against a bucket configured for 0.5,
+        which is exactly the burst signature the bucket exists to suppress. At the default
+        ``items_per_watch`` the loop runs once, so the bypass was invisible.
+
+        Adapters that make no request (the fixture source) simply never call this, which is
+        why the limiter cannot be charged for offline work.
+        """
+        waited = await self._limiter.acquire()
+        if waited > 0.5:
+            self.log.debug("throttled %.1fs before %s", waited, what)
+
     async def _guarded(self, operation: Callable[[], Awaitable[T]], what: str) -> T:
-        """Run one adapter operation under the rate limiter, with bounded retry.
+        """Run one adapter operation with bounded retry, concurrency cap and block penalty.
+
+        The rate-limit token is *not* taken here — ``_throttle`` charges one per request, and
+        an operation may issue several. This method owns everything that is genuinely
+        per-operation: the semaphore, the retry loop, and the penalty on a block.
 
         Retry policy, and why it is this timid: Shopee converts persistent retries of a soft
         block into a hard one. So ``SourceBlocked`` is **never** retried — it empties the
-        bucket instead — and only transport-level failures get a second chance.
+        bucket instead — and only transport-level failures get a second chance. A retried
+        operation re-enters the request path, so it pays a fresh token.
 
         Raises:
             SourceBlocked: The site refused us (bucket penalised, no retry).
@@ -137,9 +160,6 @@ class SourceAdapter(abc.ABC):
         last: Optional[SourceError] = None
 
         for attempt in range(1, attempts + 1):
-            waited = await self._limiter.acquire()
-            if waited > 0.5:
-                self.log.debug("throttled %.1fs before %s", waited, what)
             try:
                 async with self._semaphore:
                     return await operation()

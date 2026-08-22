@@ -18,6 +18,7 @@ import Theme
 Item {
     id: card
 
+    property bool claimInflated: false
     property real claimedDiscount: 0
     property string confidence: "none"
     property string confidenceLabel: ""
@@ -295,7 +296,7 @@ Item {
                     visible: card.soldText.length > 0
                 }
                 Text {
-                    color: card.claimedDiscount - card.discount > 15 ? Theme.caution : Theme.textMuted
+                    color: card.claimInflated ? Theme.caution : Theme.textMuted
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSm
                     text: "Shopee claims −" + card.claimedDiscount + "%"
@@ -336,7 +337,7 @@ Item {
             color: Theme.glassFillStrong
             height: 26
             opacity: hover.hovered ? 1 : 0
-            radius: 13
+            radius: Theme.radiusPill
             width: 26
 
             Behavior on opacity {

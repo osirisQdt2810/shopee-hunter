@@ -21,6 +21,66 @@ Format for each entry:
 
 ---
 
+## 2026-08-23 — The rate limiter charges per request, and the UI stops making judgements
+
+**What:** Six defects from the PR #1 review, five of them behavioural. The token bucket is
+now charged in the per-request helpers (`_throttle`) instead of once per `_guarded`
+operation; the affiliate adapter raises `ParseError` naming the field instead of coercing an
+unreadable `priceDiscountRate`/`ratingStar` to a default; QML no longer decides what an
+inflated claim is or which sale tiers are loud; and the ADR-002 guard now covers all four
+value kinds it always claimed to.
+
+**Why:** each one failed *silently*, which is what made them worth fixing together.
+
+- **Rate limiting (ADR-007).** `_guarded` took one token per operation, but a search is not
+  one request — the web and browser adapters loop over `query.page_count`, and the affiliate
+  adapter pages until it has `query.limit` items. Raising `items_per_watch` to 600 bought ten
+  back-to-back requests with a single token: ~10 req/s against a bucket set to 0.5 with a
+  burst of 4. At the default of 60 the loop runs once, so nothing showed. The seam's own
+  claim — "rate limiting is enforced here so no adapter can bypass it" — was false for every
+  multi-page search.
+- **Typed failures (ADR-004).** `except (TypeError, ValueError): rate = 0` turned a wire
+  format change into `claimed_discount_pct=0` on every item, which disables `CLAIM_INFLATED`
+  (no claim left to compare) and then filters the whole page out against
+  `min_discount_pct` — "no deals" during a live sale, with nothing naming the field. The
+  `ratingStar` coercion sat outside the try entirely, so a bare `ValueError` escaped
+  `SourceChain` (which only catches `SourceError`) and skipped the fallback to the next
+  adapter.
+- **Business rules in QML (ADR-002/005).** `DealCard.qml` re-implemented
+  `CLAIM_INFLATION_TOLERANCE_PCT` as a literal `15`; retuning the constant in `core/deals.py`
+  would drop a listing from `is_genuine` while the card still painted its claim calm grey.
+  `CalendarView.qml` and `AppWindow.qml` asked `tierLevel >= 3`, hardcoding which `SaleTier`
+  members are campaigns — inserting a tier renders 12.12 as a neutral badge.
+- **The guard itself.** `test_architecture.py` and `check_layers.py` matched hex colours
+  only, while the rubric and the PR checklist said colour/radius/duration/font size. Twelve
+  literals had slipped through, including a `radius: 13` one pixel off `Theme.radiusMd` and a
+  `duration: 1200` that cannot honour `reducedMotion`.
+
+**Files:** `sources/base.py` (`_throttle`), `sources/shopee_web.py`,
+`sources/shopee_browser.py`, `sources/affiliate_api.py`, `core/sale_calendar.py`
+(`PEAK_TIERS`, `is_peak`, `is_elevated`), `core/settings.py` (`items_per_watch` bound),
+`gui/models.py` (`ClaimInflatedRole`), `gui/bridge.py` (`tierIsPeak`, `tierTone`), twelve
+`gui/qml/**` files, `gui/qml/Theme/Theme.qml` (`durSweep`, `fontGlyph`),
+`tests/test_architecture.py`, `scripts/hooks/check_layers.py`, and five test modules
+(+53 tests).
+
+**How to verify:**
+```bash
+bash scripts/run_tests.sh -q            # 350 passed
+pre-commit run --all-files              # includes the widened layer/Theme guard
+python scripts/ui_screenshot.py --out .artifacts/ui   # exit 0 = zero QML warnings
+python scripts/live_check.py --keyword "tai nghe bluetooth" --source web --min-discount 5
+```
+The rate-limit fix has a real regression test: `test_every_page_of_a_search_pays_the_rate_limiter`
+drives the actual `_get_json` path through respx and fails (`0 == 3`) if `_throttle` is removed.
+
+**Notes / rollback:** `tierLevel` still exists and is still correct for `Theme.tierGlow`,
+which ramps an intensity rather than branching; `test_qml_never_branches_on_the_sale_tier_ordinal`
+is what keeps the distinction. `Theme.radiusPill` is used for every dot and pill — Qt clamps
+`radius` to half the smaller side, so one token expresses all of them.
+
+---
+
 ## 2026-08-23 — Shopee refuses anonymous search: measured, and encoded in the adapters
 
 **What:** The browser adapter no longer imitates Shopee's API request — it navigates to the

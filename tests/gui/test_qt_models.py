@@ -80,6 +80,7 @@ class TestDealListModel:
             "warnings",
             "history",
             "url",
+            "claimInflated",
         } <= names
 
     def test_prices_arrive_formatted_not_raw(self, model):
@@ -108,6 +109,41 @@ class TestDealListModel:
         assert (
             "inflated claim" not in row["flags"]
         ), "a fake discount must never be rendered among the positive badges"
+
+    def test_claim_inflated_is_exposed_as_the_engines_verdict(
+        self, product_factory, snapshot_factory, now
+    ):
+        """The card paints a suspicious claim; the engine decides what is suspicious.
+
+        DealCard.qml used to colour the "Shopee claims −N%" line with its own
+        `claimedDiscount - discount > 15`, a copy of CLAIM_INFLATION_TOLERANCE_PCT. Retuning
+        the constant in core/deals.py would then drop a listing from `is_genuine` while the
+        card still painted its claim in calm grey — the UI quietly failing to warn about
+        exactly the listings this app exists to catch, with no test going red.
+        """
+        from shopee_hunter.core.deals import evaluate
+
+        # Claimed 50% against a price that has barely moved: the engine calls it inflated.
+        inflated = evaluate(
+            product_factory(price=200_000, before=400_000, claimed=50),
+            snapshot_factory(205_000, count=14),
+            now=now,
+        )
+        # The same claim, this time matched by a real drop from the observed baseline.
+        honest = evaluate(
+            product_factory(price=200_000, before=400_000, claimed=50),
+            snapshot_factory(390_000, count=14),
+            now=now,
+        )
+        model = DealListModel()
+
+        model.set_deals([inflated])
+        assert model.get(0)["claimInflated"] is True
+        assert "inflated claim" in model.get(0)["warnings"]
+
+        model.set_deals([honest])
+        assert model.get(0)["claimInflated"] is False
+        assert "inflated claim" not in model.get(0)["warnings"]
 
     def test_an_uncredible_rating_is_not_displayed(self, product_factory):
         from shopee_hunter.core.deals import evaluate

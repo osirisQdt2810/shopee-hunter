@@ -52,7 +52,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             color: toast.toneColor
             height: 8
-            radius: 4
+            radius: Theme.radiusPill
             width: 8
 
             // A pulse rather than a static dot: it draws the eye to a message that appeared

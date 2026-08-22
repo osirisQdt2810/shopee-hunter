@@ -55,6 +55,26 @@ SCAN_INTERVAL_SECONDS: dict[SaleTier, int] = {
     SaleTier.MEGA: 60 * 5,
 }
 
+# The campaign days worth shouting about. Membership, not `tier >= 3`: the integer values are
+# an implementation detail of the enum's ordering, and inserting a tier would silently
+# redefine every threshold written against them.
+PEAK_TIERS: frozenset[SaleTier] = frozenset({SaleTier.DOUBLE_DATE, SaleTier.MEGA})
+
+
+def is_peak(tier: SaleTier) -> bool:
+    """Is this one of the big campaign windows (a double date or a mega day)?
+
+    The UI leans on this to decide how loud to be. It lives here rather than in the view
+    because "which days are the big ones" is a fact about Shopee's calendar, not a styling
+    choice — and because a test can reach it here.
+    """
+    return tier in PEAK_TIERS
+
+
+def is_elevated(tier: SaleTier) -> bool:
+    """Is anything at all going on — any tier above an ordinary quiet day?"""
+    return tier is not SaleTier.QUIET
+
 
 @dataclass(frozen=True, slots=True, order=True)
 class SaleWindow:

@@ -119,7 +119,7 @@ Item {
                     id: shimmer
 
                     height: parent.height
-                    radius: 1
+                    radius: Theme.radiusPill
                     width: parent.width * 0.28
 
                     gradient: Gradient {
@@ -143,7 +143,7 @@ Item {
                         running: view.bridge ? view.bridge.busy && Theme.effectiveMotion > 0 : false
 
                         NumberAnimation {
-                            duration: 1200
+                            duration: Theme.durSweep
                             from: -shimmer.width
                             to: shimmer.parent.width
                         }
@@ -192,7 +192,7 @@ Item {
                         implicitHeight: 40
                         implicitWidth: 4
                         opacity: scroller.active ? 1.0 : 0.35
-                        radius: 2
+                        radius: Theme.radiusPill
 
                         Behavior on opacity {
                             NumberAnimation {
@@ -202,6 +202,7 @@ Item {
                     }
                 }
                 delegate: DealCard {
+                    claimInflated: model.claimInflated
                     claimedDiscount: model.claimedDiscount
                     confidence: model.confidence
                     confidenceLabel: model.confidenceLabel

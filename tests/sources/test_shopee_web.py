@@ -129,6 +129,41 @@ class TestHappyPath:
         await adapter.aclose()
 
     @respx.mock
+    async def test_every_page_of_a_search_pays_the_rate_limiter(self, settings):
+        """ADR-007, through the real request path rather than a test double.
+
+        A three-page search is three requests and must cost three tokens. It used to cost
+        one: the limiter was charged once per `search()` in `_guarded`, while `_do_search`
+        looped over the pages underneath it. Nothing was visible at the default
+        `items_per_watch` of 60, which yields a single page.
+        """
+        from shopee_hunter.core.rate_limit import AsyncTokenBucket
+
+        taken = 0
+        limiter = AsyncTokenBucket(rate=1e6, burst=1000)
+        real_acquire = limiter.acquire
+
+        async def counting_acquire(cost: float = 1.0) -> float:
+            nonlocal taken
+            taken += 1
+            return await real_acquire(cost)
+
+        limiter.acquire = counting_acquire  # type: ignore[method-assign]
+
+        settings.demo_mode = False
+        settings.sources.web.enabled = True
+        adapter = ShopeeWebSource(settings, limiter=limiter)
+        route = respx.get(SEARCH_PATH).mock(
+            return_value=httpx.Response(200, json=healthy_body(count=60, nomore=False))
+        )
+
+        await adapter.search(SearchQuery("tai nghe", limit=180))
+
+        assert route.call_count == 3
+        assert taken == route.call_count, "one token per request, not per search"
+        await adapter.aclose()
+
+    @respx.mock
     async def test_an_empty_result_is_not_an_error(self, adapter, query):
         respx.get(SEARCH_PATH).mock(
             return_value=httpx.Response(200, json={"error": None, "items": []})
