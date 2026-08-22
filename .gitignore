@@ -1,0 +1,42 @@
+# Secrets: never commit a cookie, token, or API key.
+# Only the *.example.toml templates are tracked; the live files are runtime.
+config/*.toml
+!config/*.example.toml
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build output
+build/
+dist/
+badge/
+
+# Runtime and local data.
+# .artifacts/ holds UI screenshots and live-check output — regenerate, don't commit.
+.artifacts/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+# The Playwright profile holds a real logged-in Shopee session.
+browser-profile/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
