@@ -72,9 +72,11 @@ Format for each entry:
 ### Next up
 - **Two one-time GitHub setup steps before auto-merge can work** (they need the account
   owner): install the Claude GitHub App on the repo, and add a `CLAUDE_CODE_OAUTH_TOKEN`
-  actions secret (`claude setup-token`). Until then `pr-review.yml` fails closed by design —
-  which is what it did on PR #1 — and `automerge.yml` cannot run. The `automerge` label
-  already exists.
+  actions secret (`claude setup-token`). Both are now **done**, and the first turned out not
+  to be required at all: the review job passes the action its own GITHUB_TOKEN, which skips
+  the App-token exchange that the App would otherwise be needed for. Skipping it also
+  retired the "workflow-editing PRs can never be reviewed" exception, which would have hit
+  PR #1 itself. The `automerge` label already existed and is now applied.
 - **Windows hand-verification**: the DWM acrylic path in `gui/window.py` and the PowerShell
   toast in `services/notifier.py` have documented fallbacks but no real-hardware run.
 - **Capture a wire fixture** once a signed-in browser profile exists; the three skipped

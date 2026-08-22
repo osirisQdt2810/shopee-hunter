@@ -166,12 +166,19 @@ gh pr create --base main --title "…" --body-file /tmp/pr-body.md
 
 ### CI: auto-review and auto-merge
 `.github/workflows/` holds `ci.yml` (offline suite + lint on ubuntu/windows/macos),
-`pr-review.yml` (Claude reviews the diff and must emit `VERDICT: APPROVE|BLOCKING`),
-`automerge.yml` (merges only when: tests green **and** verdict APPROVE **and** the
-`automerge` label is present **and** the reviewed commit is still HEAD), and `claude.yml`
-(responds to `@claude` in comments). Known permanent exception: a PR that edits
-`.github/workflows/**` cannot pass the review job — GitHub refuses the app a token when
-workflow content differs from the default branch — so those need a manual merge.
+`pr-pipeline.yml` — the whole PR gate in one file: tests, the `pr-body` template check,
+coverage, the Claude review that must emit `VERDICT: APPROVE|BLOCKING`, and an `Auto-merge`
+job that merges only when tests are green **and** the verdict is APPROVE **and** the
+`automerge` label is present **and** the reviewed commit is still HEAD — plus `claude.yml`
+(responds to `@claude` in comments).
+
+The review job hands the action the workflow's own GITHUB_TOKEN, which makes it skip the
+OIDC-to-GitHub-App token exchange. Without that, the exchange refuses any PR whose workflow
+files differ from `main` — and refuses it *silently*, by returning rather than failing, so
+the job goes green having reviewed nothing. That is why the old "a PR editing
+`.github/workflows/**` can never be reviewed" exception no longer applies. `claude.yml`
+keeps the App token on purpose: it pushes fixes, and a GITHUB_TOKEN push raises no workflow
+event, so the pipeline would never re-run on them.
 
 ## Common Commands
 
