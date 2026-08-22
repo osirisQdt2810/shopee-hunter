@@ -280,7 +280,7 @@ Window {
                                 hint: root.bridge && root.bridge.sourceUsed ? "via " + root.bridge.sourceUsed : "no scan yet"
                                 label: "verified deals"
                                 tint: Theme.positive
-                                value: root.bridge ? root.bridge.dealCount : "0"
+                                value: root.bridge ? root.bridge.genuineCount : "0"
                             }
                             StatTile {
                                 height: parent.height

@@ -213,7 +213,11 @@ Item {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    color: Theme.scoreColor(card.score)
+                    // The engine's headline verdict, finally rendered. `genuine` was being
+                    // computed in core, exposed on the model and assigned to this component,
+                    // then never read — so a drop the engine had rejected as not genuine
+                    // printed in exactly the same confident colour as one it had verified.
+                    color: card.genuine ? Theme.scoreColor(card.score) : Theme.caution
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.Bold

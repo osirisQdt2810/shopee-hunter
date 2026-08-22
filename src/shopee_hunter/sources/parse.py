@@ -52,27 +52,61 @@ def _require(payload: Mapping[str, Any], field: str, *, source: str) -> Any:
     return payload[field]
 
 
-def _rating(payload: Mapping[str, Any]) -> tuple[Optional[float], int]:
+def _number(value: Any, field: str, *, where: str, source: str) -> Optional[float]:
+    """Read one optional numeric wire field, or raise `ParseError` naming it.
+
+    The absent/unreadable split this enforces is the difference between a listing that
+    reports nothing and a wire format that moved. Coercing the second case to a default is
+    the single most dangerous habit in a parser for this app: the value silently becomes a
+    neutral number, every downstream judgement made from it is wrong in the *safe-looking*
+    direction, and nothing raises.
+
+    Absent (missing, ``None``, ``""``) returns ``None``. Anything else must be a finite
+    number — ``float("nan")`` and ``float("1e400")`` both succeed, and a NaN propagates into
+    comparisons that quietly answer ``False``.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ParseError(
+            f"{where}: {field} is not numeric ({value!r})", source=source
+        ) from exc
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ParseError(f"{where}: {field} is not finite ({value!r})", source=source)
+    return number
+
+
+def _rating(
+    payload: Mapping[str, Any], *, where: str, source: str
+) -> tuple[Optional[float], int]:
     """Extract ``(stars, count)`` from ``item_rating``.
 
     ``rating_count`` is a histogram: ``[total, 1-star, 2-star, 3-star, 4-star, 5-star]``.
     Element 0 is the total, and older payloads occasionally omit the list entirely.
+
+    A non-numeric ``rating_star`` raises rather than becoming ``None``: ``None`` flips
+    ``rating_is_credible``, which adds ``UNRATED_SELLER`` and its score penalty to *every*
+    listing on the page at once — a page-wide reranking caused by a field nobody noticed had
+    changed shape.
     """
     rating = payload.get("item_rating") or {}
-    stars = rating.get("rating_star")
     counts = rating.get("rating_count")
     total = 0
-    if isinstance(counts, Sequence) and counts:
-        try:
-            total = int(counts[0])
-        except (TypeError, ValueError):
-            total = 0
-    elif isinstance(counts, (int, float)):
+    # `str` is a Sequence, so a `rating_count` of "1234" would index to "1" and parse as a
+    # count of one. Excluding str/bytes keeps the histogram branch about actual histograms.
+    if isinstance(counts, Sequence) and not isinstance(counts, (str, bytes)) and counts:
+        total = int(
+            _number(counts[0], "rating_count[0]", where=where, source=source) or 0
+        )
+    elif isinstance(counts, (int, float)) and not isinstance(counts, bool):
         total = int(counts)
-    try:
-        stars_value = float(stars) if stars is not None else None
-    except (TypeError, ValueError):
-        stars_value = None
+    elif isinstance(counts, (str, bytes)):
+        total = int(_number(counts, "rating_count", where=where, source=source) or 0)
+    stars_value = _number(
+        rating.get("rating_star"), "rating_star", where=where, source=source
+    )
     return stars_value, total
 
 
@@ -172,12 +206,21 @@ def parse_item(
     if before is not None and before.amount <= price.amount:
         before = None
 
-    stars, rating_count = _rating(basic)
+    where = f"item {shop_id}_{item_id}"
+    stars, rating_count = _rating(basic, where=where, source=source)
 
-    try:
-        claimed = int(basic.get("raw_discount") or 0)
-    except (TypeError, ValueError):
-        claimed = 0
+    # An ABSENT raw_discount means "this listing claims nothing" and is ordinary. A value
+    # that is present but unreadable means the wire format moved, and defaulting it to 0 is
+    # how this app would betray its own purpose: with claimed_discount_pct == 0 the
+    # comparison in core/deals.py can never exceed the inflation tolerance, so CLAIM_INFLATED
+    # never fires, is_genuine stops filtering, the score penalty stops applying, and every
+    # permanently-"-50%" listing — exactly what ADR-005 exists to suppress — ranks as
+    # verified. The card then renders "Shopee claims -0%" in calm grey, so the fake listing
+    # looks *more* trustworthy than an honest one.
+    claimed = int(
+        _number(basic.get("raw_discount"), "raw_discount", where=where, source=source)
+        or 0
+    )
 
     return Product(
         item_id=item_id,
@@ -188,7 +231,15 @@ def parse_item(
         claimed_discount_pct=max(0, min(claimed, 100)),
         rating=stars,
         rating_count=rating_count,
-        sold_count=int(basic.get("historical_sold") or basic.get("sold") or 0),
+        sold_count=int(
+            _number(
+                basic.get("historical_sold") or basic.get("sold"),
+                "historical_sold",
+                where=where,
+                source=source,
+            )
+            or 0
+        ),
         stock=basic.get("stock"),
         image_url=_image_url(basic),
         shop=parse_shop(basic),

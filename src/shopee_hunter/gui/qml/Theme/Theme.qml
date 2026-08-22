@@ -29,6 +29,11 @@ QtObject {
     readonly property color auroraB: "#7C4DFF"
     readonly property color auroraC: "#00BCD4"
     readonly property color auroraD: "#FF2E93"
+
+    // The scrim that sits between the aurora blobs and the content. Deliberately not bgDeep:
+    // it is a translucent wash, and reading it as "the deep background colour" would make a
+    // restyle of bgDeep silently change how much of the aurora shows through.
+    readonly property color auroraScrim: Qt.rgba(0.02, 0.03, 0.06, 0.68)
     readonly property color bgBase: "#0B0E17"
 
     // ---------------------------------------------------------------- palette
@@ -74,6 +79,10 @@ QtObject {
     readonly property int fontSm: 12
     readonly property int fontXl: 19
     readonly property int fontXs: 10
+
+    // Smaller than fontXs and used for exactly one thing: the glyph inside a traffic-light
+    // dot, which is 12px across. It is a token so the type ramp can be retuned as a ramp.
+    readonly property int fontXxs: 8
     readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.13)
     readonly property color glassBorderStrong: Qt.rgba(1, 1, 1, 0.18)
 
@@ -89,6 +98,11 @@ QtObject {
     property bool nativeBlur: false
     readonly property color negative: "#FF5A6E"
 
+    // Surfaces that were hand-mixing their own near-black / near-white and so opted out of a
+    // restyle. Each one is the *only* definition of that surface, so changing the palette
+    // here now actually moves them.
+    readonly property color panelShadow: Qt.rgba(0, 0, 0, 0.45)
+
     // Semantic colours. "Good deal" is green, an inflated claim is amber, an error is red —
     // and score colouring uses the same three so a badge and a ring never disagree.
     readonly property color positive: "#2DD4A7"
@@ -100,6 +114,7 @@ QtObject {
     readonly property int radiusSm: 8
     readonly property int radiusXl: 28
     property bool reducedMotion: false
+    readonly property color ringTrack: Qt.rgba(1, 1, 1, 0.10)
     readonly property int sidebarWidth: 224
     readonly property int spacingLg: 22
     readonly property int spacingMd: 14

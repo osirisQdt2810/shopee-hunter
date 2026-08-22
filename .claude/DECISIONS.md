@@ -438,12 +438,19 @@ tests, re-reading the diff, clicking merge. But an auto-merge that trusts any on
 how an unreviewed regression lands on `main`.
 
 ### Decision
-Four workflows. `ci.yml` runs the offline suite and lint on ubuntu/windows/macOS and checks
-that the PR body kept every required template heading. `pr-review.yml` has Claude review the
-diff against `CONVENTIONS.md` and emit `VERDICT: APPROVE` or `VERDICT: BLOCKING`.
-`automerge.yml` squash-merges **only when all four hold**: tests green, verdict APPROVE, the
-`automerge` label present, and the reviewed commit still `HEAD`. `claude.yml` answers
-`@claude` mentions.
+Three workflows. `pr-pipeline.yml` is the gate and holds every job that decides a PR's
+fate: the offline suite and lint on ubuntu/windows/macOS, a check that the PR body kept
+every required template heading, coverage, a Claude review of the diff against
+`CONVENTIONS.md` emitting `VERDICT: APPROVE` or `VERDICT: BLOCKING`, and a merge job that
+fires **only when all four hold**: tests green, verdict APPROVE, the `automerge` label
+present, and the reviewed commit still `HEAD`. `ci.yml` re-runs the suite on pushes to
+`main` and publishes the coverage badge. `claude.yml` answers `@claude` mentions.
+
+The review job hands the action the workflow's own GITHUB_TOKEN so it skips the
+OIDC-to-GitHub-App token exchange. Without that the gate cannot run at all unless the Claude
+GitHub App is installed, and — worse — the exchange refuses any PR whose workflow files
+differ from `main` by *returning* rather than failing, so the review job would go green
+having reviewed nothing.
 
 ### Rationale
 - The label makes auto-merge **opt-in per PR**, so a risky change simply does not get it.

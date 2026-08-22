@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import ClassVar, Optional, TypeVar
 
 from ..core.errors import (
+    ParseError,
     SourceAuthRequired,
     SourceBlocked,
     SourceError,
@@ -240,7 +241,17 @@ class SourceChain:
                 continue
             try:
                 result = await call(adapter)
-            except (SourceBlocked, SourceUnavailable, SourceAuthRequired) as exc:
+            except (
+                SourceBlocked,
+                SourceUnavailable,
+                SourceAuthRequired,
+                ParseError,
+            ) as exc:
+                # ParseError is in this list on purpose. A wire-format change in one
+                # transport is precisely when the next one is worth trying: the affiliate
+                # schema moving says nothing about whether site search still parses. Leaving
+                # it out made the ordered chain useless in the one case it was built for,
+                # and turned a single renamed field into a total scan failure.
                 errors.append(f"{adapter.id}: {exc}")
                 self.log.info("falling back past %s for %s", adapter.id, what)
                 continue

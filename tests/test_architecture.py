@@ -29,16 +29,39 @@ CORE_FORBIDDEN = ("PySide6", "httpx", "sqlite3", "playwright", "respx")
 # Layers that own I/O. They may use core/, never gui/.
 IO_LAYERS = ("sources", "storage", "services")
 
-# ADR-002's four value kinds. Kept beside each other so extending the rule means editing one
-# place here and its twin in scripts/hooks/check_layers.py.
+# ADR-002's value kinds. Kept beside each other so extending the rule means editing one place
+# here and its twin in scripts/hooks/check_layers.py.
 QML_LITERAL_COLOUR = r'"#[0-9A-Fa-f]{3,8}"'
 
-# A bare number assigned straight to a design property. An expression (`radius: width / 2`)
-# is fine — it derives from geometry rather than inventing a value — so the number must be
-# the whole right-hand side. Zero is exempt: `radius: 0` is the absence of rounding, not a
-# design decision anyone would want to retune from Theme.qml.
+# `Qt.rgba(...)` built entirely from numbers. This codebase's own idiom for *deriving* a
+# colour is `Qt.rgba(Theme.accent.r, …)`, which stays correct through a restyle; the
+# all-numeric form is a hand-mixed colour that does not, and matching quoted hex alone could
+# never see it. Requiring every argument to be numeric is what keeps the derived form legal.
+QML_LITERAL_RGBA = re.compile(
+    r"Qt\.rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*[\d.]+\s*)?\)"
+)
+
+# A bare number as the whole right-hand side of a design property. An expression
+# (`radius: width / 2`, `duration: Theme.durAmbient / 4`) is fine: it derives from geometry
+# or from a token, so it still moves when the theme does. Zero is exempt — `radius: 0` is the
+# absence of rounding, not a value anyone would retune centrally.
 QML_LITERAL_DESIGN_VALUE = re.compile(
-    r"\b(?:font\.)?(?:radius|duration|pixelSize)\s*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$"
+    r"\b(?:font\.)?(?:radius|duration|pixelSize|pointSize)\s*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$"
+)
+
+# The same value hiding in a ternary branch — `font.pixelSize: cond ? 8 : Theme.fontSm`.
+# Worth its own pattern because the anchored rule above requires the number to be the entire
+# RHS, and a conditional is the natural place a per-case size gets written by hand.
+QML_LITERAL_TERNARY = re.compile(
+    r"\b(?:font\.)?(?:radius|duration|pixelSize|pointSize)\s*:.*\?\s*"
+    r"(?:(?!0\s*:)\d+(?:\.\d+)?\s*:|[^:?]*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$)"
+)
+
+QML_LITERAL_PATTERNS = (
+    QML_LITERAL_COLOUR,
+    QML_LITERAL_RGBA,
+    QML_LITERAL_DESIGN_VALUE,
+    QML_LITERAL_TERNARY,
 )
 
 
@@ -112,16 +135,26 @@ def test_gui_holds_no_deal_logic() -> None:
 
 
 def test_qml_uses_theme_tokens_not_literal_design_values() -> None:
-    """No literal colour, radius, duration or font size in QML outside Theme.qml (ADR-002).
+    """Literal design values in QML outside Theme.qml (ADR-002).
 
     Platform-identical rendering and a one-file restyle both depend on this, and it is the
     single easiest rule to break by accident.
 
-    All four of the rubric's value kinds are checked, not just colour. An earlier version
-    matched hex literals only, which let `radius: 13` sit one pixel off `Theme.radiusMd` and
-    a hard-coded `duration: 1200` ignore `reducedMotion` — while the checklist claimed the
-    rule was machine-checked. A guard that covers a quarter of its stated rule is worse than
-    no guard, because it is trusted.
+    WHAT THIS ACTUALLY CATCHES, stated precisely because two earlier versions of this
+    docstring claimed more than the patterns delivered:
+
+    * quoted hex colours, and `Qt.rgba(...)` whose arguments are all numeric;
+    * radius / duration / pixelSize / pointSize given a bare number as the whole RHS;
+    * the same value hidden in a ternary branch.
+
+    WHAT IT DOES NOT CATCH, deliberately: a literal used as an operand of an otherwise
+    derived expression — `Theme.durAmbient / 4`, `width / 2`, `Theme.fontXs - 1`. Those still
+    move when the theme moves, which is the property ADR-002 protects. The cost of that
+    exemption is that a magic constant can hide inside a larger expression:
+    `Math.max(600, Theme.durSlow * 2)` did exactly that, and defeated `reducedMotion` by
+    flooring an animation at 600ms. No regex separates a scaling factor from a magic number
+    reliably, so that case is caught in review — and this docstring says so instead of
+    implying the check is total.
     """
     qml_root = PACKAGE / "gui" / "qml"
     theme_file = qml_root / "Theme" / "Theme.qml"
@@ -134,15 +167,12 @@ def test_qml_uses_theme_tokens_not_literal_design_values() -> None:
         ):
             if line.lstrip().startswith("//"):
                 continue
-            for match in re.finditer(QML_LITERAL_COLOUR, line):
-                offenders.append(
-                    f"{path.relative_to(qml_root)}:{number} {match.group(0)}"
-                )
-            match = QML_LITERAL_DESIGN_VALUE.search(line)
-            if match:
-                offenders.append(
-                    f"{path.relative_to(qml_root)}:{number} {match.group(0).strip()}"
-                )
+            for pattern in QML_LITERAL_PATTERNS:
+                match = re.search(pattern, line)
+                if match:
+                    offenders.append(
+                        f"{path.relative_to(qml_root)}:{number} {match.group(0).strip()}"
+                    )
     assert not offenders, (
         "literal design values in QML — add a token to Theme.qml instead:\n"
         + "\n".join(offenders)
@@ -177,6 +207,15 @@ def test_every_qml_file_is_registered_in_its_qmldir() -> None:
         "                duration: 1200",
         "        font.pixelSize: 52",
         "            pixelSize: 18",
+        "        font.pointSize: 11",
+        # Hand-mixed colours: quoted hex, and the Qt.rgba form hex-matching could never see.
+        '        color: "#FF5722"',
+        "        border.color: Qt.rgba(1, 1, 1, 0.35)",
+        "        shadowColor: Qt.rgba(0, 0, 0, 0.45)",
+        "        color: Qt.rgba(0.02, 0.03, 0.06, 0.68)",
+        # The same design value hiding in a ternary branch.
+        "        font.pixelSize: parent.traffic ? 8 : Theme.fontSm",
+        "        radius: hovered ? Theme.radiusSm : 12",
     ],
 )
 def test_the_design_value_guard_catches_each_literal_kind(line: str) -> None:
@@ -189,7 +228,7 @@ def test_the_design_value_guard_catches_each_literal_kind(line: str) -> None:
     pattern is pinned here rather than left to be re-derived from whatever it happens to
     match today.
     """
-    assert QML_LITERAL_DESIGN_VALUE.search(line)
+    assert any(re.search(pattern, line) for pattern in QML_LITERAL_PATTERNS)
 
 
 @pytest.mark.parametrize(
@@ -202,6 +241,15 @@ def test_the_design_value_guard_catches_each_literal_kind(line: str) -> None:
         "        radius: 0",
         "        implicitHeight: 40",
         "        height: 7",
+        # Derived from a token or from geometry: still moves when the theme moves.
+        "        duration: Theme.durAmbient / 4",
+        "        font.pixelSize: Theme.fontXs - 1",
+        "        radius: parent.radius - 1",
+        # Qt.rgba built FROM a token is the codebase's idiom and must stay legal.
+        "        color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.42)",
+        # Zero is the absence of rounding, in a ternary as much as on its own.
+        "        radius: maximised ? 0 : Theme.windowRadius",
+        "        font.pixelSize: big ? Theme.fontXl : Theme.fontSm",
     ],
 )
 def test_the_design_value_guard_allows_tokens_and_geometry(line: str) -> None:
@@ -210,7 +258,7 @@ def test_the_design_value_guard_allows_tokens_and_geometry(line: str) -> None:
     `radius: 0` is the absence of rounding rather than a value anyone would retune centrally,
     and plain dimensions (`height`, `implicitHeight`) are layout, not theme.
     """
-    assert not QML_LITERAL_DESIGN_VALUE.search(line)
+    assert not any(re.search(pattern, line) for pattern in QML_LITERAL_PATTERNS)
 
 
 def test_qml_never_branches_on_the_sale_tier_ordinal() -> None:
@@ -235,4 +283,51 @@ def test_qml_never_branches_on_the_sale_tier_ordinal() -> None:
     assert not offenders, (
         "QML compares tierLevel against a number — use bridge.tierIsPeak or "
         "bridge.tierTone instead:\n" + "\n".join(offenders)
+    )
+
+
+def test_every_dealcard_property_is_wired_by_the_delegate() -> None:
+    """A property DealCard declares but DealsView never assigns is dead plumbing.
+
+    This is not hypothetical tidiness. `genuine` — the deal engine's headline verdict, the
+    single judgement this whole app exists to make — was declared on the card, exposed by the
+    model, assigned by the delegate, and then read by nothing, so a listing the engine had
+    rejected rendered identically to one it had verified. A role can be added, plumbed and
+    forgotten in three separate files without one test noticing, which is exactly the shape
+    of mistake a structural check catches and a behavioural one does not.
+    """
+    qml_root = PACKAGE / "gui" / "qml"
+    card = (qml_root / "components" / "DealCard.qml").read_text(encoding="utf-8")
+    view = (qml_root / "views" / "DealsView.qml").read_text(encoding="utf-8")
+
+    declared = set(re.findall(r"^\s*property\s+\w+\s+(\w+)\s*:", card, re.MULTILINE))
+    # `index` comes from the delegate's own context, not from the model.
+    declared -= {"index"}
+
+    unwired = {
+        name
+        for name in declared
+        if not re.search(rf"^\s*{name}\s*:", view, re.MULTILINE)
+    }
+    assert (
+        not unwired
+    ), f"DealCard declares but DealsView never assigns: {sorted(unwired)}"
+
+    # Comments are stripped before counting uses. Leaving them in makes the check trivially
+    # satisfiable by the very comment explaining what the property is for — which is exactly
+    # what happened the first time this test was run against the bug it was written for.
+    code = "\n".join(
+        line for line in card.splitlines() if not line.lstrip().startswith("//")
+    )
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
+
+    unread = set()
+    for name in declared:
+        # A property is "read" if it appears anywhere other than its own declaration line.
+        uses = len(re.findall(rf"\b(?:card\.)?{name}\b", code))
+        if uses <= 1:
+            unread.add(name)
+    assert not unread, (
+        f"DealCard declares properties nothing in the component reads: {sorted(unread)}. "
+        f"Either render the value or stop plumbing it."
     )

@@ -172,10 +172,20 @@ class TestTierClassification:
     def test_only_a_quiet_day_is_not_elevated(self, tier: SaleTier) -> None:
         assert is_elevated(tier) is (tier is not SaleTier.QUIET)
 
-    def test_every_tier_is_classified(self) -> None:
-        """A tier added later must be given an answer here, not inherit one from its number."""
-        assert set(SaleTier) >= PEAK_TIERS
-        assert {tier for tier in SaleTier if is_peak(tier)} == PEAK_TIERS
+    def test_classification_is_membership_not_a_threshold(self) -> None:
+        """The property that makes inserting a tier safe.
+
+        A view asking `tier >= 3` reclassifies every day the moment a member is inserted
+        anywhere below the top. Membership does not: the set names the two campaign tiers, so
+        a new tier is non-peak until someone decides otherwise. Asserting the *names* is what
+        makes this fail on an accidental reclassification — comparing `is_peak` against
+        `PEAK_TIERS` would only restate the definition.
+        """
+        assert {tier.name for tier in SaleTier if is_peak(tier)} == {
+            "DOUBLE_DATE",
+            "MEGA",
+        }
+        assert all(tier in SaleTier for tier in PEAK_TIERS)
 
     def test_peak_days_scan_harder_than_quiet_ones(self) -> None:
         """The classification has to agree with the cadence it claims to describe."""

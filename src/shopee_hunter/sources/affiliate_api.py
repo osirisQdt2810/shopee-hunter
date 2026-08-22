@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from typing import Any, Optional
 
@@ -170,6 +171,36 @@ class AffiliateApiSource(SourceAdapter):
             )
         return data
 
+    def _number(
+        self, node: dict[str, Any], field: str, item_id: int
+    ) -> Optional[float]:
+        """Read one optional numeric field, or raise `ParseError` naming it.
+
+        Absent (missing, ``None``, ``""``) means "the API did not report this" and returns
+        ``None``. Anything else must be a finite number: a value that is present but
+        unreadable means the wire format moved, and coercing it to a default is how this
+        adapter used to report a page of items as no deals at all.
+
+        The finiteness check is not pedantry — ``float("nan")`` and ``float("1e400")``
+        succeed, and a NaN rating propagates into comparisons that silently answer False.
+        """
+        raw = node.get(field)
+        if raw is None or raw == "":
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ParseError(
+                f"affiliate node {item_id}: {field} is not numeric ({raw!r})",
+                source=self.id,
+            ) from exc
+        if not math.isfinite(value):
+            raise ParseError(
+                f"affiliate node {item_id}: {field} is not finite ({raw!r})",
+                source=self.id,
+            )
+        return value
+
     def _to_product(self, node: dict[str, Any]) -> Product:
         """Map an affiliate node onto the shared model.
 
@@ -198,7 +229,9 @@ class AffiliateApiSource(SourceAdapter):
         else:
             try:
                 rate = int(float(rate_raw))
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError, OverflowError) as exc:
+                # OverflowError, not just ValueError: `float("inf")` parses fine and only
+                # `int()` refuses it, so a rate of "inf" would otherwise escape untyped.
                 raise ParseError(
                     f"affiliate node {item_id}: priceDiscountRate is not numeric "
                     f"({rate_raw!r})",
@@ -206,20 +239,10 @@ class AffiliateApiSource(SourceAdapter):
                 ) from exc
 
         # Same absent-vs-unreadable split as the rate above. Truthiness is not the test: an
-        # empty list is not "no rating", it is a field that changed shape.
-        rating_raw = node.get("ratingStar")
-        try:
-            rating = (
-                None if rating_raw is None or rating_raw == "" else float(rating_raw)
-            )
-        except (TypeError, ValueError) as exc:
-            # Outside a typed error this escapes the seam entirely: SourceChain only catches
-            # SourceError, so a bare ValueError here would skip the fallback to the next
-            # adapter and surface as an untyped traceback in the GUI.
-            raise ParseError(
-                f"affiliate node {item_id}: ratingStar is not numeric ({rating_raw!r})",
-                source=self.id,
-            ) from exc
+        # empty list is not "no rating", it is a field that changed shape. Unlike the rate,
+        # this one stays a float — and `float()` happily returns nan/inf for "nan"/"1e400",
+        # which `int()` would have refused, so it needs the finiteness check `_number` makes.
+        rating = self._number(node, "ratingStar", item_id)
 
         before = (
             Money(round(price / (1 - rate / 100)), currency) if 0 < rate < 100 else None
@@ -236,7 +259,10 @@ class AffiliateApiSource(SourceAdapter):
             # The affiliate schema exposes no rating count; 0 means the deal engine treats
             # the rating as not-yet-credible, which is the correct conservative reading.
             rating_count=0,
-            sold_count=int(node.get("sales") or 0),
+            # Same typed coercion as the rest: `int(node.get("sales") or 0)` was the third
+            # instance of the swallow-and-default shape this class was fixed for, and would
+            # have thrown a bare ValueError on a `sales` of "2.5k".
+            sold_count=int(self._number(node, "sales", item_id) or 0),
             image_url=str(node.get("imageUrl") or ""),
             shop=Shop(
                 shop_id=shop_id,
@@ -262,9 +288,35 @@ class AffiliateApiSource(SourceAdapter):
             )
             offer = data.get("productOfferV2") or {}
             nodes = offer.get("nodes") or []
+            # Per-node tolerance, matching `parse_search_response`'s documented policy: one
+            # malformed listing among fifty must not cost the user the other forty-nine, but
+            # a page where *nothing* parses is a wire-format change and has to say so.
+            # Letting a single bad node abort the page would have turned the typed-error fix
+            # into a worse failure than the swallowing it replaced.
+            failures: list[str] = []
+            parsed = 0
             for node in nodes:
-                if isinstance(node, dict):
+                if not isinstance(node, dict):
+                    failures.append(f"non-object node: {type(node).__name__}")
+                    continue
+                try:
                     collected.append(self._to_product(node))
+                except ParseError as exc:
+                    failures.append(str(exc))
+                    continue
+                parsed += 1
+            if nodes and parsed == 0:
+                raise ParseError(
+                    f"none of {len(nodes)} affiliate nodes could be parsed; first reason: "
+                    f"{failures[0] if failures else 'unknown'}",
+                    source=self.id,
+                )
+            if failures:
+                self.log.warning(
+                    "skipped %d unparseable affiliate node(s); first: %s",
+                    len(failures),
+                    failures[0],
+                )
             if not (offer.get("pageInfo") or {}).get("hasNextPage") or not nodes:
                 break
             page += 1

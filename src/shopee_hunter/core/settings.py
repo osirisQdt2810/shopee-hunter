@@ -25,6 +25,7 @@ from platformdirs import PlatformDirs
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .errors import ConfigError
+from .logging import get_logger
 
 APP_NAME = "SaleHunter"
 APP_AUTHOR = "osirisQdt2810"
@@ -188,16 +189,26 @@ class ScanSettings(PersistedModel):
     @field_validator("items_per_watch")
     @classmethod
     def _bounded_page_span(cls, value: int) -> int:
-        """Cap the pages one watch may request.
+        """Cap the pages one watch may request — by clamping, never by refusing.
 
-        `SearchQuery.page_count` is derived from this, and each page is a separate request.
+        `SearchQuery.page_count` is derived from this and each page is a separate request.
         The limiter charges per request so a large value can no longer burst past the bucket
-        — it just makes one watch slow, and starves the others behind it. 300 is five pages,
-        which is already more than a person reads.
+        (ADR-007); it can still make one watch monopolise the budget while the others wait.
+        300 is five pages, already more than a person reads.
+
+        Clamped rather than rejected because this value is *persisted*. ADR-009's whole point
+        is that a settings file must never stop the app starting — `AppSettings.load` turns
+        any validation error into a fatal `ConfigError`, so raising here would mean a file
+        written by a build that allowed 600 bricks the launch of a build that does not. A
+        ceiling that silently costs you the tail of one search is a far better failure than
+        an app that will not open.
         """
-        if not 1 <= value <= 300:
-            raise ValueError("items_per_watch must be between 1 and 300")
-        return value
+        clamped = max(1, min(value, 300))
+        if clamped != value:
+            get_logger("settings").warning(
+                "scan.items_per_watch %d is outside 1..300; using %d", value, clamped
+            )
+        return clamped
 
     genuine_only: bool = True
     history_lookback_days: int = 90

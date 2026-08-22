@@ -21,14 +21,33 @@ PACKAGE = REPO_ROOT / "src" / "shopee_hunter"
 CORE_FORBIDDEN = ("PySide6", "httpx", "sqlite3", "playwright")
 IO_LAYERS = ("sources", "storage", "services")
 
-# ADR-002 covers colour, radius, duration and font size. The twin of this pair lives in
-# tests/test_architecture.py; both must move together.
+# ADR-002. The twin of this block lives in tests/test_architecture.py, whose docstring states
+# exactly what these do and do not catch; both must move together.
 QML_LITERAL_COLOUR = r'"#[0-9A-Fa-f]{3,8}"'
+
+# `Qt.rgba(...)` from numbers alone. `Qt.rgba(Theme.accent.r, …)` derives from a token and
+# survives a restyle; the all-numeric form is a hand-mixed colour that does not.
+QML_LITERAL_RGBA = re.compile(
+    r"Qt\.rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*[\d.]+\s*)?\)"
+)
 
 # A bare number as the whole right-hand side of a design property. `radius: width / 2`
 # derives from geometry and is fine; `radius: 0` is the absence of rounding, not a token.
 QML_LITERAL_DESIGN_VALUE = re.compile(
-    r"\b(?:font\.)?(?:radius|duration|pixelSize)\s*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$"
+    r"\b(?:font\.)?(?:radius|duration|pixelSize|pointSize)\s*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$"
+)
+
+# The same, hidden in a ternary branch: `font.pixelSize: cond ? 8 : Theme.fontSm`.
+QML_LITERAL_TERNARY = re.compile(
+    r"\b(?:font\.)?(?:radius|duration|pixelSize|pointSize)\s*:.*\?\s*"
+    r"(?:(?!0\s*:)\d+(?:\.\d+)?\s*:|[^:?]*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$)"
+)
+
+QML_LITERAL_PATTERNS = (
+    QML_LITERAL_COLOUR,
+    QML_LITERAL_RGBA,
+    QML_LITERAL_DESIGN_VALUE,
+    QML_LITERAL_TERNARY,
 )
 
 
@@ -102,18 +121,14 @@ def main() -> int:
         ):
             if line.lstrip().startswith("//"):
                 continue
-            match = re.search(QML_LITERAL_COLOUR, line)
-            if match:
-                violations.append(
-                    f"{path.relative_to(REPO_ROOT)}:{number}: literal colour {match.group(0)} — "
-                    f"add a token to Theme.qml instead (ADR-002)"
-                )
-            match = QML_LITERAL_DESIGN_VALUE.search(line)
-            if match:
-                violations.append(
-                    f"{path.relative_to(REPO_ROOT)}:{number}: literal "
-                    f"{match.group(0).strip()} — add a token to Theme.qml instead (ADR-002)"
-                )
+            for pattern in QML_LITERAL_PATTERNS:
+                match = re.search(pattern, line)
+                if match:
+                    violations.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number}: literal "
+                        f"{match.group(0).strip()} — add a token to Theme.qml instead "
+                        f"(ADR-002)"
+                    )
 
     if violations:
         print("Layer boundary violations:\n")

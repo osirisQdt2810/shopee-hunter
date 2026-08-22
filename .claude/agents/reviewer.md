@@ -118,7 +118,8 @@ the diff, or a claim?>
 ### Coverage assessment (new-logic coverage estimate; missing scenarios)
 ### VERDICT: APPROVE | BLOCKING
 ```
-The `VERDICT:` line is mandatory and machine-read by `.github/workflows/automerge.yml` —
+The `VERDICT:` line is mandatory and machine-read by the `Auto-merge` job in
+`.github/workflows/pr-pipeline.yml` —
 emit exactly one, as the last line.
 
 ## Severity guide

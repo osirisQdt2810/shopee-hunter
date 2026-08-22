@@ -15,7 +15,15 @@ from typing import Optional
 LOGGER_NAME = "shopee_hunter"
 
 # Substrings that mark a value as secret wherever they appear (query string, JSON, header).
+#
+# The two settings field names are listed in FULL as well as by their generic stem, because
+# the value patterns below anchor on `\b` and `_` is a word character: `\bsecret\b` never
+# matches inside `app_secret`, and `\bcookie\b` never matches inside `cookie_string`. Both are
+# exactly the names these values carry in a settings dump or a repr, so the generic stems were
+# missing the most likely way either one reaches a log.
 _SECRET_KEYS = (
+    "cookie_string",
+    "app_secret",
     "cookie",
     "authorization",
     "csrftoken",

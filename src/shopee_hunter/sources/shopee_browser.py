@@ -144,6 +144,10 @@ class ShopeeBrowserSource(SourceAdapter):
             else await self._context.new_page()
         )
         self._page.set_default_timeout(self.config.nav_timeout_seconds * 1000)
+        # The opening navigation is an outbound request like any other and has to pay for
+        # itself, or the per-request invariant `_throttle` documents has a hole in it on the
+        # very first call of a session (ADR-007).
+        await self._throttle(f"open https://{self.domain}/")
         try:
             await self._page.goto(
                 f"https://{self.domain}/", wait_until="domcontentloaded"

@@ -21,6 +21,67 @@ Format for each entry:
 
 ---
 
+## 2026-08-23 — No silent defaults in the shared parser; the ADR-002 guard can finally see
+
+**What:** Round-3 review findings, plus an independent adversarial pass over round 2's own
+fixes. The shared `sources/parse.py` — used by *both* the web and browser adapters — no
+longer coerces an unreadable `raw_discount`, `rating_star`, `rating_count` or
+`historical_sold` into a neutral default. `SourceChain` now falls back on `ParseError`. The
+Theme guard sees `Qt.rgba(...)` and ternary branches, and its pre-commit half actually runs
+on QML-only commits. Six hand-mixed colours and sizes became tokens.
+
+**Why:** round 2 fixed the swallow-and-default shape in the *secondary* adapter and left it
+in the primary path. `int(basic.get("raw_discount") or 0)` turning `"52%"` into `0` means
+`claimed - true_pct` can never exceed the inflation tolerance, so `CLAIM_INFLATED` never
+fires, `is_genuine` stops filtering, the score penalty stops applying — and every
+permanently-"−50%" listing, the exact thing ADR-005 exists to suppress, ranks as verified
+while the card prints "Shopee claims −0%" in calm grey. The fake listing ends up looking
+*more* trustworthy than an honest one.
+
+Three of the fixes were defects in round 2's fixes, found by an adversarial pass rather than
+by the reviewer:
+
+- **`ParseError` did not actually restore the fallback round 2 claimed it did.**
+  `_first_answer` caught only the three availability errors, so the ordered chain was useless
+  in the one case it exists for. The comment asserting otherwise was wrong and is gone.
+- **One bad node aborted the whole affiliate page**, contradicting the per-item tolerance
+  `parse_search_response` documents ("one malformed listing among sixty should not cost the
+  user the other fifty-nine"). Raising had replaced a silent wrong answer with a loud total
+  failure.
+- **`items_per_watch`'s hard bound could brick startup.** `AppSettings.load` turns any
+  validation error into a fatal `ConfigError`, so a file written by a build that allowed 600
+  would stop a newer build from opening — precisely what ADR-009 exists to prevent. Now
+  clamped with a warning.
+
+Also: `_ensure_page`'s opening navigation was the one request path not paying a token;
+`app_secret=…` was never redacted (`\bsecret\b` cannot match inside `app_secret`, since `_`
+is a word character); `genuine` — the engine's headline verdict — was computed, exposed,
+assigned to `DealCard` and then read by nothing, so a rejected listing rendered identically
+to a verified one, and the "verified deals" tile counted rows rather than genuine deals.
+
+**Files:** `sources/parse.py` (`_number`, `_rating`), `sources/affiliate_api.py`,
+`sources/base.py`, `sources/shopee_browser.py`, `core/settings.py`, `core/logging.py`,
+`gui/models.py`, `gui/bridge.py` (`tone_for_tier`, `genuineCount`), `gui/qml/Theme/Theme.qml`
+(`panelShadow`, `ringTrack`, `auroraScrim`, `fontXxs`), six QML components,
+`tests/test_architecture.py`, `scripts/hooks/check_layers.py`, `.pre-commit-config.yaml`,
+`.github/workflows/pr-pipeline.yml`, and seven test modules (+81 tests, 350 → 432).
+
+**How to verify:**
+```bash
+bash scripts/run_tests.sh -q            # 432 passed
+pre-commit run --all-files
+python scripts/ui_screenshot.py --out .artifacts/ui   # exit 0 = zero QML warnings
+```
+
+**Notes / rollback:** the Theme guard's docstring now states exactly what it does *not*
+catch — a literal inside an otherwise-derived expression, which is how
+`Math.max(600, Theme.durSlow * 2)` defeated `reducedMotion`. Two earlier versions of that
+docstring overclaimed, which is worse than no guard because it is trusted. The verdict
+fallback in `pr-pipeline.yml` is now restricted by time as well as author, since any workflow
+in the repo can post as `github-actions[bot]`.
+
+---
+
 ## 2026-08-23 — The rate limiter charges per request, and the UI stops making judgements
 
 **What:** Six defects from the PR #1 review, five of them behavioural. The token bucket is

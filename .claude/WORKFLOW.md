@@ -113,17 +113,21 @@ gh pr edit --add-label automerge      # optional: let CI merge it once green + A
 ```
 
 ### What CI does to your PR
-1. **`ci.yml`** — offline suite + lint on ubuntu, windows and macOS (py3.11 + 3.13), plus a
-   `pr-body` check that every required template heading is present.
-2. **`pr-review.yml`** — Claude reviews the diff against `CONVENTIONS.md` and must end with
-   `VERDICT: APPROVE` or `VERDICT: BLOCKING`.
-3. **`automerge.yml`** — squash-merges only when tests are green **and** the verdict is
-   APPROVE **and** the `automerge` label is on **and** the reviewed commit is still HEAD.
-4. **`claude.yml`** — replies to `@claude` in a PR/issue comment.
+1. **`pr-pipeline.yml`** — the whole PR gate in one workflow:
+   - `Tests` — the offline suite on ubuntu/windows/macOS across py3.11–3.13, plus lint;
+   - `PR description` — every required template heading is present;
+   - `Coverage` — measured, reported, deliberately not a gate;
+   - `Claude review` — reviews the diff against `CONVENTIONS.md` and must end with
+     `VERDICT: APPROVE` or `VERDICT: BLOCKING`;
+   - `Auto-merge` — merges only when tests are green **and** the verdict is APPROVE **and**
+     the `automerge` label is on **and** the reviewed commit is still HEAD.
+2. **`ci.yml`** — the same offline suite on pushes to `main`, plus the coverage badge.
+3. **`claude.yml`** — replies to `@claude` in a PR/issue comment.
 
-Known permanent exception: a PR touching `.github/workflows/**` cannot pass `pr-review`
-(GitHub withholds a token when workflow content differs from the default branch) — merge
-those by hand.
+A PR touching `.github/workflows/**` used to be unreviewable, because the action's
+OIDC-to-App token exchange refuses a workflow that differs from the default branch. The
+review job now passes the action its own GITHUB_TOKEN, which skips that exchange, so those
+PRs review and merge like any other.
 
 ---
 

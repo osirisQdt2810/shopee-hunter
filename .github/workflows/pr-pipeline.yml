@@ -222,6 +222,10 @@ jobs:
         run: |
           echo "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is available (unset, or this is a fork PR). Refusing to skip review while auto-merge is possible."
           exit 1
+      - name: Stamp when this review began
+        # Read by the verdict fallback below, which will only trust a VERDICT marker in a
+        # comment posted after this instant — see the reasoning there.
+        run: echo "REVIEW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -322,13 +326,29 @@ jobs:
           v=$(cat "$RUNNER_TEMP/verdict" 2>/dev/null || true)
           if [ -z "$v" ]; then
             echo "No verdict file — falling back to the VERDICT marker in the review bot's comments."
-            # Author-restricted on purpose: this marker IS the merge instruction, so only an
-            # identity no human can post under may carry it. The review now comments as
-            # github-actions[bot] (see the header); claude[bot] stays listed so installing the
-            # App later cannot silently break the fallback. --paginate because a page holds 30
-            # comments and the verdict is the newest one, not the oldest.
+            # Restricted two ways, because this marker IS the merge instruction.
+            #
+            # By AUTHOR: only an identity a human cannot post under. Since the review now
+            # comments as github-actions[bot] (see the header) that login has to be accepted
+            # — but note it is weaker than claude[bot] was, because *any* workflow in this
+            # repo can post as github-actions[bot]. claude[bot] stays listed so installing
+            # the App later cannot silently break the fallback.
+            #
+            # By TIME: only a comment newer than this run's review step. That is what stops a
+            # stale APPROVE — from an earlier run, or planted by a job on this same PR —
+            # being harvested to merge a commit it was never about. Without it the author
+            # restriction alone would be close to meaningless.
+            #
+            # --paginate because a page holds 30 comments and the verdict is the newest.
+            # Piped through real `jq` rather than gh's `--jq`, which takes only a query and
+            # has no `--arg`: passing one silently mangles the whole invocation.
             v=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-                  --jq '[.[] | select(.user.login == "github-actions[bot]" or .user.login == "claude[bot]" or .user.login == "claude") | .body] | join("\n")' \
+                | jq -r --arg since "$REVIEW_STARTED_AT" '.[]
+                        | select(.created_at >= $since)
+                        | select(.user.login == "github-actions[bot]"
+                                 or .user.login == "claude[bot]"
+                                 or .user.login == "claude")
+                        | .body' \
                 | grep -oE 'VERDICT: (APPROVE|BLOCKING)' | tail -1 | awk '{print $2}' || true)
           fi
           if [ "$v" != "APPROVE" ]; then v=BLOCKING; fi

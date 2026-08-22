@@ -66,7 +66,11 @@ repos:
         name: layer boundaries (core/ pure, gui/ ruleless)
         entry: python scripts/hooks/check_layers.py
         language: system
-        files: '^src/shopee_hunter/.*\.py$'
+        # .qml as well as .py: half of this hook is the ADR-002 Theme-token check, and with a
+        # .py-only filter a commit touching nothing but QML — the exact commit that adds a
+        # hard-coded colour — never ran it. The hook scans the whole tree anyway
+        # (pass_filenames: false), so this pattern only decides *when* it fires.
+        files: '^src/shopee_hunter/.*\.(py|qml)$'
         pass_filenames: false
 
   # NOTE: mypy is intentionally NOT a commit gate yet. The strict config lives in

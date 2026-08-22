@@ -55,7 +55,7 @@ Item {
             ctx.lineWidth = ring.thickness;
             ctx.lineCap = "round";
 
-            ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.10);
+            ctx.strokeStyle = Theme.ringTrack;
             ctx.beginPath();
             ctx.arc(cx, cy, r, 0, Math.PI * 2);
             ctx.stroke();

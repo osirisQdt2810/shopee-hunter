@@ -361,3 +361,43 @@ class TestRegistry:
         chain = build_chain(settings, only=["web"])
 
         assert [adapter.id for adapter in chain.adapters] == ["web"]
+
+
+class TestParseErrorFallsThrough:
+    """A wire-format change in one transport must not end the whole scan.
+
+    `_first_answer` used to catch only the three availability errors, so a `ParseError` — the
+    thing raised when a field changes shape — escaped the chain entirely. That made the
+    ordered fallback useless in exactly the case it exists for: the affiliate schema moving
+    says nothing about whether site search still parses. Round-2 finding #5 converted an
+    untyped `ValueError` into a `ParseError` on the stated grounds that the chain would then
+    fall back; it would not have, until this.
+    """
+
+    async def test_the_chain_tries_the_next_adapter(
+        self, settings, query, product_factory
+    ):
+        from shopee_hunter.core.errors import ParseError
+
+        broken = RecordingAdapter(
+            settings, behaviour=[ParseError("ratingStar moved", source="recording")]
+        )
+        working = RecordingAdapter(settings, behaviour=[[product_factory()]])
+
+        products = await SourceChain([broken, working]).search(query)
+
+        assert len(products) == 1
+        assert working.calls == 1
+
+    async def test_a_parse_error_still_reaches_the_scanner_when_nothing_works(
+        self, settings, query
+    ):
+        """Falling through must not mean swallowing: the last word is still an error."""
+        from shopee_hunter.core.errors import ParseError
+
+        broken = RecordingAdapter(
+            settings, behaviour=[ParseError("raw_discount moved", source="recording")]
+        )
+
+        with pytest.raises(SourceBlocked, match="raw_discount moved"):
+            await SourceChain([broken]).search(query)

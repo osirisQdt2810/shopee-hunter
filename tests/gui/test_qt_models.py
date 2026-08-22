@@ -221,3 +221,47 @@ class TestWatchListModel:
         model.set_watches([Watch("a", "tai nghe", min_rating=None)])
 
         assert model.data(model.index(0, 0), WatchListModel.MinRatingRole) == 0.0
+
+
+class TestTierTone:
+    """The tier → badge-tone mapping the views used to make for themselves.
+
+    `CalendarView.qml` and `AppWindow.qml` both asked `bridge.tierLevel >= 3`, which encodes
+    which `SaleTier` members are campaigns. Insert a tier below MEGA and every one of those
+    comparisons shifts by one, so 12.12 renders as a neutral grey badge on the single day the
+    app exists to shout about — silently, with the suite green.
+    """
+
+    @pytest.mark.parametrize(
+        ("tier", "tone"),
+        [
+            ("QUIET", "neutral"),
+            ("FLASH_SLOT", "caution"),
+            ("PAYDAY", "caution"),
+            ("DOUBLE_DATE", "accent"),
+            ("MEGA", "accent"),
+        ],
+    )
+    def test_each_tier_gets_its_tone(self, tier: str, tone: str) -> None:
+        from shopee_hunter.core.sale_calendar import SaleTier
+        from shopee_hunter.gui.bridge import tone_for_tier
+
+        assert tone_for_tier(SaleTier[tier]) == tone
+
+    def test_every_tone_is_one_the_badge_component_understands(self) -> None:
+        """A tone string the Badge does not know renders as its neutral fallback, silently."""
+        from pathlib import Path
+
+        from shopee_hunter.core.sale_calendar import SaleTier
+        from shopee_hunter.gui.bridge import tone_for_tier
+
+        badge = (
+            Path(__file__).resolve().parents[2]
+            / "src/shopee_hunter/gui/qml/components/Badge.qml"
+        ).read_text(encoding="utf-8")
+
+        for tier in SaleTier:
+            assert f'"{tone_for_tier(tier)}"' in badge, (
+                f"{tier.name} maps to tone {tone_for_tier(tier)!r}, which Badge.qml does "
+                f"not handle"
+            )

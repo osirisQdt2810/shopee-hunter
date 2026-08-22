@@ -96,7 +96,7 @@ Item {
     // card's secondary text.
     Rectangle {
         anchors.fill: parent
-        color: Qt.rgba(0.02, 0.03, 0.06, 0.68)
+        color: Theme.auroraScrim
     }
 
     // Fine noise breaks up the banding a large smooth gradient shows on 8-bit panels.

@@ -93,3 +93,125 @@ class TestIdentity:
 
         with pytest.raises(ParseError):
             source._to_product(node)
+
+
+class TestPageTolerance:
+    """One bad node must not cost the whole page — the policy `parse_search_response` states.
+
+    Raising `ParseError` from `_to_product` was the right call for a field that changed
+    shape, but letting it abort `_do_search` would have replaced a silent wrong answer with a
+    loud total failure: fifty good listings discarded because one was odd. The shared parser
+    already resolves this exact tension ("one malformed listing among sixty should not cost
+    the user the other fifty-nine"), and this adapter has to resolve it the same way.
+    """
+
+    @staticmethod
+    def _page(nodes: list[dict], has_next: bool = False) -> dict:
+        return {
+            "productOfferV2": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next}}
+        }
+
+    async def test_a_single_bad_node_is_skipped(self, source, monkeypatch):
+        from shopee_hunter.core.models import SearchQuery
+
+        page = self._page(
+            [_node(itemId=1), _node(itemId=2, ratingStar="4.5/5"), _node(itemId=3)]
+        )
+
+        async def fake_post(query, variables):
+            return page
+
+        monkeypatch.setattr(source, "_post", fake_post)
+
+        products = await source._do_search(SearchQuery("tai nghe", limit=10))
+
+        assert [p.item_id for p in products] == [1, 3]
+
+    async def test_a_page_where_nothing_parses_raises(self, source, monkeypatch):
+        """Every node failing is not one odd listing, it is the wire format moving."""
+        from shopee_hunter.core.models import SearchQuery
+
+        page = self._page(
+            [_node(itemId=1, ratingStar="4.5/5"), _node(itemId=2, ratingStar="4.5/5")]
+        )
+
+        async def fake_post(query, variables):
+            return page
+
+        monkeypatch.setattr(source, "_post", fake_post)
+
+        with pytest.raises(ParseError, match="none of 2"):
+            await source._do_search(SearchQuery("tai nghe", limit=10))
+
+    async def test_an_empty_page_is_not_an_error(self, source, monkeypatch):
+        from shopee_hunter.core.models import SearchQuery
+
+        async def fake_post(query, variables):
+            return self._page([])
+
+        monkeypatch.setattr(source, "_post", fake_post)
+
+        assert await source._do_search(SearchQuery("tai nghe", limit=10)) == []
+
+
+class TestNumericEdgeCases:
+    @pytest.mark.parametrize("value", ["inf", "-inf", "1e400"])
+    def test_an_infinite_rate_raises_rather_than_overflowing(self, source, value):
+        """`int(float("inf"))` raises OverflowError, which is not a ValueError."""
+        with pytest.raises(ParseError, match="priceDiscountRate"):
+            source._to_product(_node(priceDiscountRate=value))
+
+    @pytest.mark.parametrize("value", ["nan", "inf", "1e400"])
+    def test_a_non_finite_rating_raises(self, source, value):
+        """`float("nan")` succeeds, and a NaN silently answers False to every comparison."""
+        with pytest.raises(ParseError, match="ratingStar"):
+            source._to_product(_node(ratingStar=value))
+
+    def test_an_unreadable_sold_count_raises_rather_than_escaping_untyped(self, source):
+        """The third instance of the swallow-and-default shape, three lines from the others."""
+        with pytest.raises(ParseError, match="sales"):
+            source._to_product(_node(sales="2.5k"))
+
+
+class TestSigning:
+    """The signature is the whole auth story for this transport, and had no coverage."""
+
+    @pytest.fixture
+    def signed(self, settings):
+        settings.sources.affiliate.app_id = "app-123"
+        settings.sources.affiliate.app_secret = "s3cr3t"
+        return AffiliateApiSource(settings)
+
+    def test_the_header_carries_credential_timestamp_and_signature(self, signed):
+        header = signed._sign('{"query":"x"}', 1_700_000_000)
+
+        assert header.startswith("SHA256 Credential=app-123,")
+        assert "Timestamp=1700000000" in header
+        assert "Signature=" in header
+
+    def test_the_secret_itself_never_appears_in_the_header(self, signed):
+        """It is hashed into the signature, not sent — a header lands in logs and bug reports."""
+        assert "s3cr3t" not in signed._sign('{"query":"x"}', 1_700_000_000)
+
+    def test_the_signature_covers_the_timestamp(self, signed):
+        """Which is why a wrong system clock shows up as an auth failure, not a network one."""
+        payload = '{"query":"x"}'
+
+        assert signed._sign(payload, 1_700_000_000) != signed._sign(
+            payload, 1_700_000_001
+        )
+
+    def test_the_signature_covers_the_payload(self, signed):
+        assert signed._sign('{"a":1}', 1_700_000_000) != signed._sign(
+            '{"a":2}', 1_700_000_000
+        )
+
+    async def test_missing_credentials_raise_before_any_request(self, settings):
+        """`SourceAuthRequired`, not a 401 round-trip — waiting cannot fix a missing key."""
+        from shopee_hunter.core.errors import SourceAuthRequired
+
+        settings.sources.affiliate.app_id = ""
+        settings.sources.affiliate.app_secret = ""
+
+        with pytest.raises(SourceAuthRequired):
+            await AffiliateApiSource(settings)._post("query", {})

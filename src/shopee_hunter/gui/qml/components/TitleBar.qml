@@ -135,7 +135,7 @@ Item {
             anchors.centerIn: parent
             color: parent.traffic ? Theme.trafficGlyph : Theme.textSecondary
             font.family: Theme.fontFamily
-            font.pixelSize: parent.traffic ? 8 : Theme.fontSm
+            font.pixelSize: parent.traffic ? Theme.fontXxs : Theme.fontSm
             font.weight: Font.Bold
             text: parent.glyph
             visible: !parent.traffic || btnHover.hovered

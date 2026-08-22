@@ -236,6 +236,16 @@ class DealListModel(QAbstractListModel):
     def deal_at(self, row: int) -> Optional[Deal]:
         return self._deals[row] if 0 <= row < len(self._deals) else None
 
+    def genuine_count(self) -> int:
+        """How many of the rows the engine actually verified.
+
+        Distinct from `rowCount`, which is every deal shown. The header tile is labelled
+        "verified deals" and the Settings view promises an inflated claim is "not counted as
+        genuine" — both were reading the row count, so a list containing a rejected listing
+        reported it as verified anyway.
+        """
+        return sum(1 for deal in self._deals if deal.is_genuine)
+
     def _sparkline(self, deal: Deal) -> list[float]:
         """Price history normalised to 0..1 for the card's sparkline.
 

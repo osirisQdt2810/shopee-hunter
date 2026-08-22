@@ -51,6 +51,22 @@ _TIER_LABEL = {
 }
 
 
+def tone_for_tier(tier: SaleTier) -> str:
+    """Map a sale tier onto one of the `Badge` component's tone names.
+
+    A module-level function rather than logic inside the property, so it is reachable by a
+    test without standing up a whole `AppBridge` — an untestable mapping is how the
+    `tierLevel >= 3` version survived in QML in the first place.
+
+    The *classification* (which tiers are campaigns) belongs to `core.sale_calendar`; only
+    the choice of colour vocabulary is made here, which is presentation and so may live in
+    `gui/`.
+    """
+    if is_peak(tier):
+        return "accent"
+    return "caution" if is_elevated(tier) else "neutral"
+
+
 class AppBridge(QObject):
     """Single QML context object: state as properties, actions as slots."""
 
@@ -127,7 +143,13 @@ class AppBridge(QObject):
 
     @Property(int, notify=statusChanged)
     def dealCount(self) -> int:
+        """Every deal on the list, verified or not."""
         return self._deals.rowCount()
+
+    @Property(int, notify=statusChanged)
+    def genuineCount(self) -> int:
+        """Only the deals the engine verified — what a tile labelled "verified" must show."""
+        return self._deals.genuine_count()
 
     @Property(str, notify=statusChanged)
     def lastScanText(self) -> str:
@@ -165,17 +187,8 @@ class AppBridge(QObject):
 
     @Property(str, notify=saleStateChanged)
     def tierTone(self) -> str:
-        """The badge tone for the current tier, as a name the Badge component understands.
-
-        The mapping tier → emphasis is made here, once, rather than in QML. A view comparing
-        `tierLevel >= 3` would be encoding which enum members are the loud ones, and adding a
-        tier anywhere below MEGA would silently shift every such comparison — rendering 12.12
-        as a neutral grey badge on the one day the app exists for.
-        """
-        tier = current_tier(datetime.now(UTC))
-        if is_peak(tier):
-            return "accent"
-        return "caution" if is_elevated(tier) else "neutral"
+        """The badge tone for the current tier, as a name the Badge component understands."""
+        return tone_for_tier(current_tier(datetime.now(UTC)))
 
     @Property(str, notify=saleStateChanged)
     def nextSaleText(self) -> str:

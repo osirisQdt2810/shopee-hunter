@@ -38,7 +38,7 @@ Rectangle {
     }
     layer.effect: MultiEffect {
         shadowBlur: 0.7
-        shadowColor: Qt.rgba(0, 0, 0, 0.45)
+        shadowColor: Theme.panelShadow
         shadowEnabled: true
         shadowHorizontalOffset: 0
         shadowVerticalOffset: 6

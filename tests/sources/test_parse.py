@@ -265,3 +265,63 @@ class TestCapturedFixture:
         assert not (
             forbidden & set(body)
         ), f"committed fixture contains session keys: {forbidden & set(body)}"
+
+
+class TestNoSilentDefaults:
+    """The shared parser must not turn a wire-format change into a neutral-looking number.
+
+    Both the web and browser adapters go through `parse_item`, so a swallow here is worth
+    more than a swallow anywhere else in the codebase — and it was the last one left after
+    the affiliate adapter was fixed.
+    """
+
+    @pytest.mark.parametrize("garbage", ["52%", "half", {}, [], "nan", "inf"])
+    def test_an_unreadable_raw_discount_raises_and_names_the_field(self, garbage):
+        """Defaulting this to 0 disables the one judgement the app exists to make.
+
+        With `claimed_discount_pct == 0`, `claimed - true_pct` can never exceed the inflation
+        tolerance, so `CLAIM_INFLATED` never fires, `is_genuine` stops filtering, the score
+        penalty stops applying — and every permanently-"-50%" listing ranks as verified. The
+        card then prints "Shopee claims -0%" in calm grey, so the fake listing ends up
+        looking *more* trustworthy than an honest one.
+        """
+        with pytest.raises(ParseError, match="raw_discount"):
+            parse_item(item_basic(raw_discount=garbage))
+
+    @pytest.mark.parametrize("absent", [None, "", 0])
+    def test_an_absent_raw_discount_is_simply_no_claim(self, absent):
+        assert parse_item(item_basic(raw_discount=absent)).claimed_discount_pct == 0
+
+    @pytest.mark.parametrize("garbage", ["4.5 stars", {}, "nan"])
+    def test_an_unreadable_rating_star_raises(self, garbage):
+        """Becoming None flips rating_is_credible for the whole page at once.
+
+        That silently adds UNRATED_SELLER and its penalty to every listing returned, which
+        reranks the entire result set because one field changed shape.
+        """
+        with pytest.raises(ParseError, match="rating_star"):
+            parse_item(item_basic(item_rating={"rating_star": garbage}))
+
+    def test_a_string_rating_count_is_not_indexed_as_a_sequence(self):
+        """`str` is a Sequence, so "1234" used to index to "1" and parse as a count of one.
+
+        A count of 1 reads as "barely reviewed" and costs the listing its credibility.
+        """
+        product = parse_item(
+            item_basic(item_rating={"rating_star": 4.5, "rating_count": "1234"})
+        )
+
+        assert product.rating_count == 1234
+
+    def test_an_unreadable_sold_count_raises(self):
+        with pytest.raises(ParseError, match="historical_sold"):
+            parse_item(item_basic(historical_sold="1.2k"))
+
+    def test_one_bad_item_still_costs_only_that_item(self):
+        """The page-level policy has to keep holding now that items can raise."""
+        good = item_basic(itemid=1)
+        bad = item_basic(itemid=2, raw_discount="52%")
+
+        products = parse_search_response({"error": None, "items": [good, bad]})
+
+        assert [p.item_id for p in products] == [1]

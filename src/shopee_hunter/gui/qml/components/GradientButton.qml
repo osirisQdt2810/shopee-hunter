@@ -127,7 +127,7 @@ Item {
                 width: 14
 
                 RotationAnimator on rotation {
-                    duration: Math.max(600, Theme.durSlow * 2)
+                    duration: Theme.durSlow * 2
                     from: 0
                     loops: Animation.Infinite
                     running: control.busy && Theme.effectiveMotion > 0
@@ -136,7 +136,7 @@ Item {
 
                 Rectangle {
                     anchors.fill: parent
-                    border.color: Qt.rgba(1, 1, 1, 0.35)
+                    border.color: Theme.glassHighlight
                     border.width: 2
                     color: "transparent"
                     radius: width / 2

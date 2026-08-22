@@ -57,6 +57,10 @@ burst = 4
 max_concurrent = 2
 
 [scan]
+# 60 = one page. Each further page is a separate request that pays the rate limiter, so a
+# big number here does not burst — it just makes one watch slow and keeps the others waiting.
+# Clamped to 1..300 (five pages); a value outside that is corrected with a warning rather
+# than refused, because a settings file must never stop the app starting (ADR-009).
 items_per_watch = 60
 # Minimum OBSERVED discount, measured against price history — not Shopee's claim (ADR-005).
 min_discount_pct = 20.0
