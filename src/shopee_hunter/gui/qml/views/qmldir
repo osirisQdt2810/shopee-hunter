@@ -1,0 +1,5 @@
+module views
+CalendarView 1.0 CalendarView.qml
+DealsView 1.0 DealsView.qml
+SettingsView 1.0 SettingsView.qml
+WatchesView 1.0 WatchesView.qml

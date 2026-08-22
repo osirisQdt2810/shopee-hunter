@@ -1,0 +1,182 @@
+# Sale Hunter — a cross-platform (Windows + macOS) desktop app that hunts discounted
+# Shopee items during sale days. PySide6/QML front end, pure-Python deal engine.
+#
+# Installed in editable mode for development:  pip install -e ".[dev]"
+# Shipped to users as a PyInstaller bundle (see packaging/), not as a wheel.
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopee-sale-hunter"
+version = "0.1.0"
+description = "Desktop deal hunter for Shopee sale days (Windows + macOS)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "phucnp" }]
+keywords = ["shopee", "deals", "price-tracker", "desktop", "pyside6", "qml"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
+
+# Runtime deps. HARD RULE: every one of these must ship wheels for macOS arm64 +
+# x86_64 and Windows x64 — a source-only or Linux-only dep breaks the packaged app.
+dependencies = [
+    "PySide6-Essentials>=6.9,<6.10", # Qt Quick/QML runtime (Essentials: no WebEngine/3D bloat)
+    "httpx>=0.28,<0.29",             # async HTTP with HTTP/2-capable transport
+    "pydantic>=2.10,<3",             # settings + wire-payload validation
+    "pydantic-settings>=2.7,<3",     # env/toml layering for the settings tree
+    "platformdirs>=4.3",             # per-OS data/config/cache dirs (never hand-rolled)
+    "python-dateutil>=2.9",          # sale-calendar arithmetic (relative deltas)
+]
+
+[project.optional-dependencies]
+# The browser-backed source adapter. OPTIONAL on purpose: it downloads a ~150 MB browser,
+# so the app must start and function without it (ADR-004).
+browser = ["playwright>=1.49"]
+
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",   # the CI coverage job; not a merge gate
+    "pytest-qt>=4.4",       # QML/Qt smoke tests
+    "pytest-asyncio>=0.24", # async adapter tests
+    "respx>=0.22",          # httpx mock transport for offline adapter tests
+    "black>=25.1",
+    "ruff>=0.9",
+    "isort>=6.0",
+    "mypy>=1.14",
+    "pre-commit>=4.0",
+]
+
+package = ["pyinstaller>=6.11"]
+
+[project.gui-scripts]
+sale-hunter = "shopee_hunter.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/osirisQdt2810/shopee-sale-hunter"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# QML, icons and other non-Python assets must travel with the package — a missing entry
+# here works in an editable install and fails only once the app is packaged.
+[tool.setuptools.package-data]
+shopee_hunter = [
+    "gui/qml/**/*.qml",
+    "gui/qml/**/qmldir",
+    "gui/qml/**/*.js",
+    "resources/**/*",
+]
+
+# ---------------------------------------------------------------------------
+# Formatting / linting / typing
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 88
+target-version = ["py311", "py312", "py313"]
+extend-exclude = '''
+/(
+    \.venv
+  | build
+  | dist
+  | tests/fixtures
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = [".venv", "build", "dist", "tests/fixtures"]
+
+[tool.ruff.lint]
+# Import sorting (I) is intentionally delegated to standalone isort, not ruff.
+# ASYNC matters here: a blocking call on the asyncio worker thread stalls every scan.
+# TID251 (banned-api) only — NOT the whole TID set: TID252 forbids `from ..core import x`,
+# which is how every module in this package imports its siblings, so selecting TID wholesale
+# flagged 140 lines of correct, intentional style.
+select = ["E", "F", "W", "N", "UP", "B", "SIM", "RUF", "TID251", "ASYNC", "PTH", "C4", "DTZ"]
+ignore = [
+    "E501",   # line length is owned by black (it won't split long strings/comments)
+    "RUF001", # ambiguous unicode in strings — Vietnamese product names are the domain
+    "RUF002", # ditto, docstrings
+    "RUF003", # ditto, comments
+    "UP007",  # tolerate Optional[X] alongside X | None (readability preference)
+    "UP045",  # ditto (ruff split the Optional case out of UP007)
+    # PEP 695 generics (`def f[T]()`) are a SyntaxError before 3.12 and we support 3.11.
+    "UP046",
+    "UP047",
+    # Exception names here read as conditions, not as objects: `SourceBlocked`,
+    # `SourceAuthRequired`, `RateLimited`. `SourceBlockedError` adds a syllable and no
+    # information, and the base class already says `SaleHunterError`.
+    "N818",
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# tomllib is stdlib only from 3.11 — fine for us, but `requests` is not a dependency and
+# must never become one: the whole I/O layer is async httpx (ADR-003).
+"requests".msg = "use httpx.AsyncClient — the I/O layer is async (ADR-003)"
+"PyQt6".msg = "this project is PySide6 (LGPL, same Qt) — never mix the two bindings"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-exports / registration-side-effect imports are intentional
+"tests/**" = ["RUF012", "SIM115", "E741", "SIM117", "F403", "F405", "N802", "N803", "N806", "DTZ"]
+"scripts/**" = ["T201"]   # operator scripts print by design
+"packaging/**" = ["F821"] # PyInstaller specs run inside its own namespace
+# Qt REQUIRES camelCase here, so PEP 8 naming cannot apply: a Signal is a class attribute
+# QML binds to by name (`onScanProgress`), and a Slot is called from QML by its own name.
+# Renaming them to snake_case does not make the code more Pythonic, it makes the QML break.
+"src/shopee_hunter/gui/bridge.py" = ["N802", "N815"]
+"src/shopee_hunter/gui/models.py" = ["N802", "N815"]
+"src/shopee_hunter/gui/window.py" = ["N802"]
+# B027: `SourceAdapter.aclose` is concrete and empty on purpose — an optional teardown hook,
+# not an abstract method. Making it abstract would force every adapter to write an empty
+# override, which teaches people to write empty overrides. (An inline `# noqa` does not
+# survive here: black reflows the signature and moves the comment off the reported line.)
+"src/shopee_hunter/sources/base.py" = ["B027"]
+
+[tool.isort]
+profile = "black"
+src_paths = ["src", "tests", "scripts"]
+skip_glob = [".venv/*", "build/*", "dist/*", "tests/fixtures/*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+# PySide6 ships partial stubs; playwright is an optional extra that may be absent.
+ignore_missing_imports = true
+exclude = '(^|/)(\.venv|build|dist|tests/fixtures|packaging)/'
+# Do NOT set `files = [...]` — run mypy explicitly on changed paths (touch-it-fix-it).
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+strict = false
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Tests — two tiers. The default run is offline and network-free; `live` is opt-in.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `-m "not live"` by default: a plain `pytest` must never touch the network or open a
+# window, so CI and pre-push stay deterministic. `pytest -m live` opts in explicitly.
+addopts = "-ra --strict-markers -m 'not live'"
+asyncio_mode = "auto"
+qt_api = "pyside6"
+markers = [
+    "live: hits the REAL Shopee site and/or opens a REAL window. Excluded from the default run; needs network and may be rate-limited or blocked (run: pytest -m live).",
+    "gui: needs a Qt application instance (pytest-qt). Runs offscreen in CI via QT_QPA_PLATFORM=offscreen.",
+    "slow: takes more than ~2s.",
+]
+filterwarnings = [
+    "error::DeprecationWarning:shopee_hunter.*",
+]

@@ -1,0 +1,82 @@
+# Sale Hunter settings. Copy to `settings.toml` next to this file for repo-local defaults,
+# or let the app write your own copy into the OS config dir (Settings view → it saves there):
+#   macOS    ~/Library/Application Support/SaleHunter/settings.toml
+#   Windows  %APPDATA%\osirisQdt2810\SaleHunter\settings.toml
+#
+# Precedence, lowest to highest:  model defaults -> this file -> the user's file -> SALEHUNTER_* env
+# Env nesting uses a DOUBLE underscore:  SALEHUNTER_UI__ACCENT=#00E5FF
+#
+# SECRETS DO NOT GO HERE. Cookies and API keys belong in `secrets.toml` (gitignored) — see
+# secrets.README.md. `AppSettings.save()` structurally excludes them from this file so a
+# config you paste into a bug report cannot leak a session.
+
+log_level = "INFO"
+# Serve the built-in demo catalogue instead of touching the network. Also `--demo`.
+demo_mode = false
+
+[storefront]
+# Which Shopee storefront to hunt on. The domain and currency must agree.
+domain = "shopee.vn"
+currency = "VND"
+language = "vi"
+
+[sources]
+# Fallback chain, tried left to right until one answers. Being refused by one is normal —
+# the app falls through instead of reporting "no deals" (ADR-004).
+order = ["affiliate", "browser", "web"]
+
+[sources.web]
+# Plain HTTP against Shopee's own /api/v4 endpoints. Works only with cookies from a real
+# logged-in browser session; without them expect `error: 10` (surfaced as SourceBlocked).
+enabled = true
+timeout_seconds = 20.0
+max_retries = 2
+retry_backoff_seconds = 5.0
+# cookie_string lives in secrets.toml, never here.
+
+[sources.browser]
+# The most reliable transport: a real browser profile you log into once, issuing the API
+# calls from inside the page so Shopee's own signed headers apply.
+# Needs the optional extra:  pip install -e ".[browser]" && playwright install chromium
+enabled = false
+channel = "chrome"     # chromium | chrome | msedge
+headless = false       # keep false for the first run so you can sign in
+nav_timeout_seconds = 45.0
+
+[sources.affiliate]
+# The official signed Open/Affiliate API. Preferred when you have keys.
+enabled = false
+endpoint = "https://open-api.affiliate.shopee.vn/graphql"
+# app_id / app_secret live in secrets.toml.
+
+[rate_limit]
+# Self-throttling is mandatory and deliberately conservative (ADR-007). The realistic worst
+# outcome of this app is not a missed discount — it is a flagged account.
+requests_per_second = 0.5
+burst = 4
+max_concurrent = 2
+
+[scan]
+items_per_watch = 60
+# Minimum OBSERVED discount, measured against price history — not Shopee's claim (ADR-005).
+min_discount_pct = 20.0
+# Drop deals the engine cannot vouch for (inflated claim, or no history at all).
+genuine_only = true
+history_lookback_days = 90
+auto_scan = true
+# Blank/absent = derive the cadence from the sale calendar, which is the point of having one.
+# interval_override_seconds = 900
+notify_on_new_deal = true
+notify_min_score = 60.0
+
+[ui]
+theme = "dark"
+accent = "#FF5722"
+translucent_window = true
+blur_strength = 0.85
+# Honours the OS "reduce motion" preference when you set this true; collapses every
+# animation to zero duration in one place.
+reduced_motion = false
+animation_scale = 1.0
+window_width = 1280
+window_height = 820
