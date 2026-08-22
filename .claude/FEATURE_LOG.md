@@ -21,6 +21,55 @@ Format for each entry:
 
 ---
 
+## 2026-08-23 — Shopee refuses anonymous search: measured, and encoded in the adapters
+
+**What:** The browser adapter no longer imitates Shopee's API request — it navigates to the
+page a shopper would open and reads the response Shopee's **own** JavaScript receives.
+`error: 90309999` and a redirect to `/verify/traffic/*` are now classified as
+`SourceAuthRequired` (log in) rather than `SourceBlocked` (wait), and `ScanResult` separates
+`refusals` from `failures` so a `ParseError` can no longer be reported as "blocked".
+
+**Why:** measured, not assumed. From a residential IP with no Shopee session:
+
+| attempt | result |
+|---|---|
+| plain HTTPS to `/api/v4/search/search_items` | `HTTP 403` |
+| headless Chromium, `fetch()` from inside the real page | `HTTP 403` |
+| headful real Chrome, `fetch()` from inside the real page | `HTTP 403` |
+| headful Chrome, navigate to `/search?keyword=…`, read the page's OWN response | redirected to `/verify/traffic/error?…&is_logged_in=false&type=4`; `search_items` answered `error: 90309999`; **0** product cards rendered |
+
+Headless and headful failing *identically* is the tell: the block is not browser
+fingerprinting, it is a per-request signature Shopee's front end computes in JavaScript. A
+`fetch` from the console does not carry it, so the request looks like a bot *inside* a real
+browser. Reading the page's own response sidesteps the problem entirely — we are no longer
+the one signing.
+
+**Conclusion that follows:** `shopee.vn` requires a **signed-in session** to search. Waiting
+does not help, so calling it a "block" would have sent users retrying forever. The working
+setup is one sign-in into the persistent browser profile.
+
+**Files:** `src/shopee_hunter/sources/shopee_browser.py` (`_capture`,
+`_assert_not_interstitial`, `INTERSTITIAL_MARKERS`), `src/shopee_hunter/sources/parse.py`
+(`ERROR_AUTH_CODES`), `src/shopee_hunter/services/scanner.py` (`refusals` / `failures` /
+`broken`), `scripts/live_check.py`, `README.md`, `tests/live/test_sources_live.py`.
+
+**How to verify:**
+```bash
+python scripts/live_check.py --keyword "tai nghe bluetooth" --source web      # expect exit 2, HTTP 403
+SALEHUNTER_SOURCES__BROWSER__ENABLED=true \
+  python scripts/live_check.py --keyword "tai nghe bluetooth" --source browser # expect exit 2, error 90309999
+pytest -m live -vv                                                            # the refusal must be TYPED
+```
+A refusal is a **pass**; a `ParseError` is a failure.
+
+**Notes / rollback:** the interstitial paths and the error codes are constants at the top of
+their modules because they will drift — when a live run starts reporting a bare `ParseError`
+with an unrecognised code, add it to the right frozenset rather than widening an `except`.
+Two live-only bugs were fixed alongside this: `RedactingFilter` coerced every log argument
+with `str()` (so the line reporting a block raised its own TypeError), and the scheduler
+called a bridge slot from the asyncio thread (`Cannot create children for a parent that is
+in a different thread`) — now routed through a queued signal, `AppBridge.request_scan`.
+
 ## 2026-08-23 — Project foundation: repo re-founded, toolchain rebuilt, deal engine written
 
 **What:** The repository stopped being a copy of an unrelated PyQt6 plugin-host project and
