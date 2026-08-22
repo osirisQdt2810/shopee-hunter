@@ -13,14 +13,30 @@
 # `needs` blocks the merge job; fork runs also get a read-only GITHUB_TOKEN.
 #
 # One-time repo setup (see the PR that introduced this file):
-#   - install the Claude GitHub App on the repo,
 #   - add the CLAUDE_CODE_OAUTH_TOKEN actions secret (`claude setup-token`),
 #   - create the `automerge` label.
 #
-# Known limitation (by design): a PR that MODIFIES any .github/workflows file
-# cannot pass the review job — the Claude GitHub App refuses to mint a token
-# when the workflow content differs from the default branch (anti-tampering).
-# Such PRs always need a manual merge.
+# Installing the Claude GitHub App is deliberately NOT a third. Left to itself
+# the action trades an OIDC token for an App installation token, and that trade
+# has two failure modes this gate cannot live with. With no App installed it
+# 401s ("Claude Code is not installed on this repository") and the review job
+# dies before reading a line of the diff. With the App installed it still
+# refuses any PR whose workflow files differ from the default branch
+# (`error_code: workflow_not_found_on_default_branch` — anti-tampering), and
+# that refusal is not an error: the action logs a warning and RETURNS, so the
+# step goes green having reviewed nothing. Read literally, a workflow-editing PR
+# could never be reviewed — this file's own introducing PR included — and the
+# way it failed was the quiet way.
+#
+# Handing the action an explicit `github_token` skips the exchange outright:
+# `setupGitHubToken()` returns the override before it even asks for an OIDC
+# token, so neither failure mode is reachable. A review gate that can silently
+# not review is worse than one that cannot start.
+#
+# The cost is cosmetic here and real in claude.yml, which is why only this file
+# takes it: the review is authored by github-actions[bot] rather than
+# claude[bot], and a GITHUB_TOKEN push raises no workflow event. This job only
+# ever comments, so it never pushes anything that needed to be noticed.
 
 name: PR Pipeline
 
@@ -216,6 +232,10 @@ jobs:
           # can never retrigger workflows — no self-trigger loops.
           GH_TOKEN: ${{ github.token }}
         with:
+          # The workflow's own token, so the action never attempts the App-token exchange
+          # (see the header). It carries exactly this job's `permissions:` block above —
+          # `issues: write` is what lets the review land as a PR comment.
+          github_token: ${{ github.token }}
           # ONE credential, not two. An unset secret renders as an EMPTY STRING, so passing
           # both made the action set ANTHROPIC_API_KEY="" whenever that secret was absent —
           # and the SDK treats a present-but-blank api key as the credential to use rather
@@ -301,9 +321,14 @@ jobs:
         run: |
           v=$(cat "$RUNNER_TEMP/verdict" 2>/dev/null || true)
           if [ -z "$v" ]; then
-            echo "No verdict file — falling back to the VERDICT marker in claude[bot]'s comments."
-            v=$(gh api "repos/$REPO/issues/$PR/comments" \
-                  --jq '[.[] | select(.user.login == "claude[bot]" or .user.login == "claude") | .body] | join("\n")' \
+            echo "No verdict file — falling back to the VERDICT marker in the review bot's comments."
+            # Author-restricted on purpose: this marker IS the merge instruction, so only an
+            # identity no human can post under may carry it. The review now comments as
+            # github-actions[bot] (see the header); claude[bot] stays listed so installing the
+            # App later cannot silently break the fallback. --paginate because a page holds 30
+            # comments and the verdict is the newest one, not the oldest.
+            v=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                  --jq '[.[] | select(.user.login == "github-actions[bot]" or .user.login == "claude[bot]" or .user.login == "claude") | .body] | join("\n")' \
                 | grep -oE 'VERDICT: (APPROVE|BLOCKING)' | tail -1 | awk '{print $2}' || true)
           fi
           if [ "$v" != "APPROVE" ]; then v=BLOCKING; fi

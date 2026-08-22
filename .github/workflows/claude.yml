@@ -5,6 +5,14 @@
 # re-tests and re-reviews the fix; with the automerge label present and an
 # APPROVE verdict, the loop closes without a human click.
 #
+# This job therefore does NOT pass `github_token`, and the difference from
+# pr-pipeline.yml is deliberate rather than an oversight. That override buys the
+# review gate independence from the App — at the price of a token whose pushes
+# raise no workflow event. The gate only ever comments, so it pays nothing; this
+# job's entire purpose is to push a fix and have the pipeline notice, so paying
+# it would break the loop. The cost lands here instead: with no App installed
+# this job cannot start at all, whereas the gate still runs.
+#
 # Guard rails: only OWNER/MEMBER/COLLABORATOR authors can trigger it (the repo
 # is public — without this, any stranger could burn the Claude quota), bot
 # events never trigger it, and the tool allowlist grants no raw `git` — commits
