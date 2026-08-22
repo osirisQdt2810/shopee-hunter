@@ -45,7 +45,9 @@ Format for each entry:
   tier → scan cadence), `core/rate_limit.py` (token bucket + async facade),
   `core/settings.py` (four-layer settings tree, secrets excluded from `save()`),
   `core/logging.py` (secret-redacting filter), `core/errors.py` (typed source failures).
-- **Git remote** set to `git@github-osirisqdt:osirisQdt2810/shopee-bot.git` (empty repo).
+- **Repo published** as `osirisQdt2810/shopee-hunter` (renamed from `shopee-bot` at the
+  user's request). `main` carries a scaffolding commit; the app itself is PR #1, so the
+  pipeline gets exercised on real content rather than on an unreviewable initial import.
 
 ### In progress
 - Source adapters, storage, services, and the QML shell — the layers below `core/`.
@@ -68,6 +70,15 @@ Format for each entry:
 - ADR-010 — CI reviews and merges its own PRs behind four simultaneous gates.
 
 ### Next up
-- Repo rename: folder `shopee` → `shopee-hunter`, and the GitHub repo `shopee-bot` →
-  `shopee-hunter` (requested; do it once the app runs).
-- Wire the source adapters, then the QML shell, then the live checks and CI.
+- **Two one-time GitHub setup steps before auto-merge can work** (they need the account
+  owner): install the Claude GitHub App on the repo, and add a `CLAUDE_CODE_OAUTH_TOKEN`
+  actions secret (`claude setup-token`). Until then `pr-review.yml` fails closed by design —
+  which is what it did on PR #1 — and `automerge.yml` cannot run. The `automerge` label
+  already exists.
+- **Windows hand-verification**: the DWM acrylic path in `gui/window.py` and the PowerShell
+  toast in `services/notifier.py` have documented fallbacks but no real-hardware run.
+- **Capture a wire fixture** once a signed-in browser profile exists; the three skipped
+  parse tests unskip themselves.
+- **mypy**: 83 findings under `strict`, mostly PySide6 stub gaps and unannotated `gui/`
+  helpers. Not a gate, but it independently caught the cross-thread bug, so it is worth
+  burning down.
