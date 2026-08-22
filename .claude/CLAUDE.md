@@ -226,6 +226,9 @@ changes, goal-driven execution).
 - **`.claude/FEATURE_LOG.md`** — one entry per large feature (append-only, newest on top).
 - **`.claude/DECISIONS.md`** — ADRs; read before changing an architectural pattern.
 - **`.claude/WORKFLOW.md`** — startup, the build/verify loop, live testing, pre-commit.
+- **`.claude/memory/MEMORY.md`** — index of standing preferences and corrections, one file
+  per fact. These live in the repo rather than in a per-device agent directory so they
+  survive a switch between machines; write new ones here, not to `~/.claude`.
 
 **Feature-log rule:** after any large feature/change (a new source adapter, a new view, a
 change to a shared seam), append an entry to `.claude/FEATURE_LOG.md`. Skip it for tiny
