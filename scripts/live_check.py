@@ -131,7 +131,12 @@ async def run(args: argparse.Namespace) -> int:
                 args.keyword,
                 max_price=args.max_price or None,
                 min_discount_pct=args.min_discount,
-                limit=args.limit,
+                # The setting, not the raw flag: `build_settings` puts `--limit` through the
+                # validator that bounds it, and `Scanner.scan_keyword` does
+                # `limit or settings.scan.items_per_watch`, so a truthy raw value wins and
+                # the bound is never consulted. `--limit 9999` would page 167 times while the
+                # log said "using 300".
+                limit=settings.scan.items_per_watch,
             )
         except (SourceBlocked, SourceAuthRequired) as exc:
             print(f"BLOCKED: {exc}")

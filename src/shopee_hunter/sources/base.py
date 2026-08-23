@@ -224,9 +224,25 @@ class SourceChain:
         )
 
     async def flash_sale(self, limit: int = 60) -> list[Product]:
+        """Fetch the current flash-sale batch from the first adapter that can.
+
+        Raises `SourceUnavailable` when *no* configured adapter supports flash sales, rather
+        than returning ``[]``. An individual adapter answering "not my capability" with an
+        empty list is fine — the chain routes past it — but a whole chain that cannot serve
+        the request is not the same fact as "nothing is on sale", and returning `[]` for both
+        is the exact anti-pattern ADR-004 forbids. An affiliate-keys-only setup is a
+        configuration ADR-004 deliberately supports, and that user pressing the flash-sale
+        action during a 21:00 slot would otherwise get an empty list, no refusals, no
+        failures and `blocked` false: indistinguishable from a quiet market.
+        """
         capable = [a for a in self.adapters if a.supports_flash_sale]
         if not capable:
-            return []
+            configured = ", ".join(a.id for a in self.adapters) or "none"
+            raise SourceUnavailable(
+                "no configured source can read flash sales (configured: "
+                f"{configured}). Enable the web or browser source to use this.",
+                source="chain",
+            )
         return await SourceChain(capable)._first_answer(
             lambda a: a.flash_sale(limit), "flash sale"
         )
@@ -235,6 +251,7 @@ class SourceChain:
         self, call: Callable[[SourceAdapter], Awaitable[T]], what: str
     ) -> T:
         errors: list[str] = []
+        caught: list[SourceError] = []
         for adapter in self.adapters:
             if not await adapter.is_available():
                 errors.append(f"{adapter.id}: not configured")
@@ -253,15 +270,42 @@ class SourceChain:
                 # it out made the ordered chain useless in the one case it was built for,
                 # and turned a single renamed field into a total scan failure.
                 errors.append(f"{adapter.id}: {exc}")
+                caught.append(exc)
                 self.log.info("falling back past %s for %s", adapter.id, what)
                 continue
             self.last_source = adapter.id
             return result
 
-        raise SourceBlocked(
-            f"every configured source failed for {what} — " + "; ".join(errors),
-            source="chain",
-        )
+        raise self._aggregate(caught, what, errors)
+
+    @staticmethod
+    def _aggregate(
+        caught: Sequence[SourceError], what: str, errors: Sequence[str]
+    ) -> SourceError:
+        """Choose the type of the whole-chain failure from what the adapters actually raised.
+
+        This used to be an unconditional ``SourceBlocked``, which quietly undid the one
+        distinction the scanner exists to keep. ``ScanResult`` splits ``refusals`` ("wait, or
+        sign in") from ``failures`` ("the wire format moved — fix the parser") because
+        merging them once sent an operator waiting out a block that was never going to clear.
+        Re-typing every aggregate as a refusal put that bug back one layer lower, where the
+        scanner's own tests could not see it: they drive a fake chain, so they never observed
+        what the real one raises.
+
+        Precedence, by what the user's next action should be:
+
+        * anything the site *refused* wins — waiting or signing in is actionable, and a
+          refusal may clear on its own;
+        * otherwise a ``ParseError`` wins over a transport failure, because it is the durable
+          problem and it carries the field name that says what changed;
+        * otherwise the transports simply failed, which is retryable.
+        """
+        summary = f"every configured source failed for {what} — " + "; ".join(errors)
+        if any(isinstance(exc, (SourceBlocked, SourceAuthRequired)) for exc in caught):
+            return SourceBlocked(summary, source="chain")
+        if any(isinstance(exc, ParseError) for exc in caught):
+            return ParseError(summary, source="chain")
+        return SourceUnavailable(summary, source="chain")
 
     async def aclose(self) -> None:
         for adapter in self.adapters:

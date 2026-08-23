@@ -7,7 +7,6 @@ value is not "the UI looks odd", it is an IP that stops being served mid-sale (A
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from shopee_hunter.core.models import SearchQuery
 from shopee_hunter.core.settings import RateLimitSettings, ScanSettings
@@ -17,10 +16,26 @@ class TestRequestRate:
     def test_the_default_is_deliberately_slow(self) -> None:
         assert RateLimitSettings().requests_per_second == 0.5
 
-    @pytest.mark.parametrize("rate", [0.0, -1.0, 5.1, 1000.0])
-    def test_an_out_of_range_rate_is_refused(self, rate: float) -> None:
-        with pytest.raises(ValidationError):
-            RateLimitSettings(requests_per_second=rate)
+    @pytest.mark.parametrize(
+        ("given", "expected"), [(0.0, 0.01), (-1.0, 0.01), (5.1, 5.0), (1000.0, 5.0)]
+    )
+    def test_an_out_of_range_rate_is_clamped_not_refused(
+        self, given: float, expected: float
+    ) -> None:
+        """Persisted values clamp; they never stop the app opening (ADR-009).
+
+        Both bounds in this file behave the same way on purpose. Having one raise and the
+        other clamp left the bricked-launch failure mode live for whichever field was not
+        thought about, while the docstring of the one that clamped implied the rule was
+        general.
+        """
+        assert RateLimitSettings(requests_per_second=given).requests_per_second == (
+            expected
+        )
+
+    def test_a_reckless_rate_is_clamped_toward_safety_not_away(self) -> None:
+        """Clamping must never hand the user the dangerous number they asked for."""
+        assert RateLimitSettings(requests_per_second=50.0).requests_per_second == 5.0
 
 
 class TestItemsPerWatch:

@@ -464,8 +464,13 @@ having reviewed nothing.
 - (+) Routine green PRs merge without a human click; the maintainer's attention goes to the
   ones that fail a gate.
 - (+) Every merged PR has a recorded review and cross-platform test run.
-- (−) A PR that edits `.github/workflows/**` can never pass review — GitHub withholds a
-  token when workflow content differs from the default branch. Documented as a permanent
-  exception; those merge by hand.
+- (+) A PR that edits `.github/workflows/**` is **reviewed** like any other. It used not to
+  be: the action's OIDC-to-App token exchange refuses a workflow differing from the default
+  branch, and refuses it by *returning*, so the job went green having reviewed nothing.
+  Passing the action the workflow's own GITHUB_TOKEN skips that exchange entirely.
+- (?) Whether such a PR also **auto-merges** is unverified. `gh pr merge` runs with
+  `GITHUB_TOKEN`, which GitHub refuses for pushes that create or update workflow files; it
+  is not established that the merge API applies the same rule. Until a workflow-touching PR
+  has actually merged through the gate, assume it may need a manual merge.
 - (−) The review is only as good as `CONVENTIONS.md`, which makes keeping that file honest
   part of the CI story rather than a documentation chore.

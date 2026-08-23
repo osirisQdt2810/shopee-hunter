@@ -175,9 +175,23 @@ class RateLimitSettings(PersistedModel):
     @field_validator("requests_per_second")
     @classmethod
     def _sane_rate(cls, value: float) -> float:
-        if not 0.01 <= value <= 5.0:
-            raise ValueError("requests_per_second must be between 0.01 and 5.0")
-        return value
+        """Clamp, for the same reason `items_per_watch` clamps.
+
+        This used to raise, and raising is the wrong shape for a *persisted* value:
+        `AppSettings.load` turns any validation error into a fatal `ConfigError`, so a
+        settings file carrying an out-of-range number stops the app opening at all. ADR-009
+        exists to prevent exactly that. Clamping to the safe end is strictly better than
+        both alternatives here — the user keeps a working app, and the rate they get is the
+        conservative one rather than the reckless one they asked for.
+        """
+        clamped = max(0.01, min(value, 5.0))
+        if clamped != value:
+            get_logger("settings").warning(
+                "rate_limit.requests_per_second %s is outside 0.01..5.0; using %s",
+                value,
+                clamped,
+            )
+        return clamped
 
 
 class ScanSettings(PersistedModel):

@@ -89,3 +89,25 @@ class TestRedactingFilter:
         RedactingFilter().filter(record)
 
         assert record.getMessage() == "backing off 120s after 1 block(s)"
+
+    @pytest.mark.parametrize(
+        "mapping",
+        [
+            {"Authorization": "SHA256 Credential=x, Signature=deadbeef"},
+            {"cookie_string": "SPC_EC=abc123"},
+            {"app_secret": "hunter2"},
+            {"csrftoken": "tok123"},
+        ],
+    )
+    def test_a_python_mapping_repr_is_covered(self, mapping: dict) -> None:
+        """`logger.debug("headers=%s", headers)` is the obvious way a header dict is logged.
+
+        A dict repr uses single quotes and a colon, so it matched neither the JSON pattern
+        (double quotes) nor the query-string pattern (`=`). No call site logs a mapping
+        today, which is exactly why the gap would go unnoticed the day one does.
+        """
+        redacted = redact(str(mapping))
+
+        for secret in mapping.values():
+            assert secret not in redacted
+        assert "<redacted>" in redacted

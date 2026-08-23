@@ -57,8 +57,18 @@ QML_LITERAL_TERNARY = re.compile(
     r"(?:(?!0\s*:)\d+(?:\.\d+)?\s*:|[^:?]*:\s*(?!0\s*$)\d+(?:\.\d+)?\s*$)"
 )
 
+# Named CSS colours. `"white"` slipped past the hex pattern for the whole life of this guard.
+# Curated rather than exhaustive, and `transparent` is deliberately absent: it means "no
+# colour at all" and is used 17 times as a legitimate structural value, not a design choice.
+QML_LITERAL_NAMED_COLOUR = re.compile(
+    r':\s*"(?:white|black|red|green|blue|yellow|orange|purple|pink|cyan|magenta|brown'
+    r'|grey|gray|lime|navy|teal|silver|gold|maroon|olive|aqua|fuchsia)"',
+    re.IGNORECASE,
+)
+
 QML_LITERAL_PATTERNS = (
     QML_LITERAL_COLOUR,
+    QML_LITERAL_NAMED_COLOUR,
     QML_LITERAL_RGBA,
     QML_LITERAL_DESIGN_VALUE,
     QML_LITERAL_TERNARY,

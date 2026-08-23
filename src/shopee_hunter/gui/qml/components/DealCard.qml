@@ -150,7 +150,7 @@ Item {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: "white"
+                    color: Theme.maskOpaque
                     radius: Theme.radiusMd
                 }
             }

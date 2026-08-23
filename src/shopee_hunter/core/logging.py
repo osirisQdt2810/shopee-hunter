@@ -43,13 +43,20 @@ _SECRET_KEYS = (
 
 _REDACTED = "<redacted>"
 
-# key=value / "key": "value" / key: value — one pattern per shape we actually log.
+# One pattern per shape a secret actually reaches a log in.
 _PATTERNS = tuple(
     re.compile(pattern % re.escape(key), re.IGNORECASE)
     for key in _SECRET_KEYS
     for pattern in (
+        # "key": "value"  /  key: "value"  — JSON, and headers written with double quotes.
         r'("?%s"?\s*[:=]\s*")([^"]*)(")',
+        # key=value — query strings, cookie strings, `repr` of a dataclass.
         r"(\b%s\b\s*=\s*)([^&;,\s]+)",
+        # 'key': 'value' — a Python dict repr, which uses single quotes and a colon and so
+        # matched neither of the above. `logger.debug("headers=%s", headers)` on a mapping is
+        # the obvious way this happens; no call site does it today, which is precisely why it
+        # would go unnoticed when one does.
+        r"('%s'\s*:\s*')([^']*)(')",
     )
 )
 

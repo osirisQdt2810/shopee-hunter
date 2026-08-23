@@ -292,3 +292,89 @@ def snapshot_products(product, snapshots):
         replace(product, price=snapshot.price, captured_at=snapshot.observed_at)
         for snapshot in snapshots
     ]
+
+
+class TestAgainstARealChain:
+    """The gap that let a re-typed aggregate through unnoticed.
+
+    Every other scanner test drives `FakeChain`, which raises whatever the test hands it —
+    an input the real `SourceChain` may be unable to produce. So "a parse failure is not a
+    refusal" was asserted at the scanner boundary while the layer below re-typed every
+    aggregate failure into `SourceBlocked`, and both tests passed. These drive the real chain
+    end to end, which is the only way the contradiction becomes visible.
+    """
+
+    class _Failing:
+        """A minimal adapter that raises whatever it was given."""
+
+        def __init__(self, exc, source="failing"):
+            self.exc = exc
+            self.id = source
+
+        async def is_available(self) -> bool:
+            return True
+
+        async def search(self, query):
+            raise self.exc
+
+        async def flash_sale(self, limit: int = 60):
+            raise self.exc
+
+        async def aclose(self) -> None:
+            return None
+
+    async def test_a_parse_failure_reaches_the_scanner_as_broken_not_blocked(
+        self, settings, repository
+    ):
+        """The end-to-end assertion: wire-format change -> "fix the parser", never "wait"."""
+        from shopee_hunter.core.errors import ParseError
+        from shopee_hunter.sources.base import SourceChain
+
+        chain = SourceChain(
+            [self._Failing(ParseError("raw_discount moved", source="web"))]
+        )
+
+        result = await Scanner(settings, chain, repository).scan_keyword("tai nghe")
+
+        assert result.broken, "a wire-format change must land in failures"
+        assert not result.blocked, "and must never be reported as a refusal"
+        assert any("raw_discount" in message for message in result.failures), (
+            "the field name has to survive the aggregation — it is the only thing that says "
+            "what actually changed"
+        )
+        await repository.close()
+
+    async def test_a_real_refusal_still_reaches_the_scanner_as_blocked(
+        self, settings, repository
+    ):
+        from shopee_hunter.sources.base import SourceChain
+
+        chain = SourceChain([self._Failing(SourceBlocked("captcha", source="web"))])
+
+        result = await Scanner(settings, chain, repository).scan_keyword("tai nghe")
+
+        assert result.blocked
+        assert not result.broken
+        await repository.close()
+
+    async def test_a_refusal_beside_a_parse_failure_is_reported_as_a_refusal(
+        self, settings, repository
+    ):
+        """Mixed causes: the one that might clear on its own is the actionable one."""
+        from shopee_hunter.core.errors import ParseError
+        from shopee_hunter.sources.base import SourceChain
+
+        chain = SourceChain(
+            [
+                self._Failing(
+                    ParseError("field moved", source="affiliate"), "affiliate"
+                ),
+                self._Failing(SourceBlocked("captcha", source="web"), "web"),
+            ]
+        )
+
+        result = await Scanner(settings, chain, repository).scan_keyword("tai nghe")
+
+        assert result.blocked
+        assert not result.broken
+        await repository.close()

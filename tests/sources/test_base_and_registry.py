@@ -298,12 +298,45 @@ class TestChain:
         self, settings, product_factory
     ):
         class NoFlash(RecordingAdapter):
+            id = "noflash"
+            supports_flash_sale = False
+
+        class WithFlash(RecordingAdapter):
+            id = "withflash"
+            supports_flash_sale = True
+
+            async def _do_flash_sale(self, limit: int) -> list[Product]:
+                self.calls += 1
+                return [product_factory()]
+
+        incapable = NoFlash(settings)
+        capable = WithFlash(settings)
+
+        products = await SourceChain([incapable, capable]).flash_sale()
+
+        assert len(products) == 1
+        assert incapable.calls == 0, "an incapable adapter must not be asked"
+        assert capable.calls == 1
+
+    async def test_a_chain_that_cannot_read_flash_sales_says_so(self, settings):
+        """ "No source can do this" is not the same fact as "nothing is on sale".
+
+        Returning `[]` for both is the anti-pattern ADR-004 exists to forbid. An
+        affiliate-keys-only setup is a configuration ADR-004 deliberately supports, and that
+        user pressing the flash-sale action during a 21:00 slot used to get an empty state
+        with no refusals, no failures and `blocked` false — indistinguishable from a quiet
+        market, and unfixable because nothing told them what was wrong.
+        """
+
+        class NoFlash(RecordingAdapter):
+            id = "noflash"
             supports_flash_sale = False
 
         incapable = NoFlash(settings)
-        chain = SourceChain([incapable])
 
-        assert await chain.flash_sale() == []
+        with pytest.raises(SourceUnavailable, match="flash sales"):
+            await SourceChain([incapable]).flash_sale()
+
         assert incapable.calls == 0
 
     def test_an_empty_chain_is_a_programming_error(self):
@@ -389,15 +422,46 @@ class TestParseErrorFallsThrough:
         assert len(products) == 1
         assert working.calls == 1
 
-    async def test_a_parse_error_still_reaches_the_scanner_when_nothing_works(
-        self, settings, query
-    ):
-        """Falling through must not mean swallowing: the last word is still an error."""
+    async def test_an_all_parse_failure_stays_a_parse_error(self, settings, query):
+        """Falling through must not re-type the failure into a refusal.
+
+        The first version of this test asserted `SourceBlocked` here and so *pinned the bug*:
+        the chain re-raised every aggregate as a refusal, which put a ParseError into
+        `ScanResult.refusals`, made `live_check.py` exit 2 ("wait") for a wire-format change,
+        and toasted "Shopee blocked the request" while every price in the app was wrong. The
+        scanner's own test could not catch it because it drives a fake chain.
+        """
         from shopee_hunter.core.errors import ParseError
 
         broken = RecordingAdapter(
             settings, behaviour=[ParseError("raw_discount moved", source="recording")]
         )
 
-        with pytest.raises(SourceBlocked, match="raw_discount moved"):
+        with pytest.raises(ParseError, match="raw_discount moved"):
             await SourceChain([broken]).search(query)
+
+    async def test_a_refusal_anywhere_wins_over_a_parse_error(self, settings, query):
+        """A refusal may clear on its own, so it is the more actionable thing to report."""
+        from shopee_hunter.core.errors import ParseError
+
+        parsing = RecordingAdapter(
+            settings, behaviour=[ParseError("field moved", source="recording")]
+        )
+        refused = RecordingAdapter(
+            settings, behaviour=[SourceBlocked("captcha", source="recording")]
+        )
+
+        with pytest.raises(SourceBlocked):
+            await SourceChain([parsing, refused]).search(query)
+
+    async def test_an_all_transport_failure_stays_unavailable(
+        self, settings, query, monkeypatch
+    ):
+        """Retryable stays retryable — it must not be reported as a block either."""
+        _skip_backoff(monkeypatch)
+        down = RecordingAdapter(
+            settings, behaviour=[SourceUnavailable("timeout", source="recording")]
+        )
+
+        with pytest.raises(SourceUnavailable):
+            await SourceChain([down]).search(query)

@@ -94,6 +94,11 @@ QtObject {
     readonly property color glassHighlight: Qt.rgba(1, 1, 1, 0.30)
     readonly property int headerHeight: 68
     readonly property color info: "#5B9DFF"
+
+    // Not a colour anyone sees: the fill of an invisible MultiEffect alpha mask, where the
+    // channel value means "fully opaque" rather than "white". A token so the literal check
+    // does not need a named-colour exemption it would then have to police.
+    readonly property color maskOpaque: "#FFFFFF"
     property real motionScale: 1.0
     property bool nativeBlur: false
     readonly property color negative: "#FF5A6E"
