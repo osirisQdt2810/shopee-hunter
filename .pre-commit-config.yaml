@@ -1,0 +1,78 @@
+# Pre-commit hooks — run on STAGED files at every `git commit` (see .claude/WORKFLOW.md).
+# Install once:  pre-commit install
+# Run manually:  pre-commit run              # staged files
+#                pre-commit run --all-files  # whole repo
+
+# Never touch captured wire fixtures (they must stay byte-identical to what the site
+# returned), build output, or the venv.
+exclude: '^(tests/fixtures/|dist/|build/|\.venv/|\.artifacts/)'
+
+default_language_version:
+  python: python3.13
+
+repos:
+  # General hygiene + config validators.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'          # trailing double-space is a hard line break in markdown
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict   # macOS is case-insensitive, Windows too, Linux CI is not
+      - id: mixed-line-ending     # keep LF in git; Windows checkouts must not flip files
+        args: ["--fix=lf"]
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: detect-private-key    # secrets/cookies must never be committed
+
+  # Import sorting — standalone isort (NOT ruff's "I" rule), profile=black (pyproject).
+  - repo: https://github.com/pycqa/isort
+    rev: 8.0.1
+    hooks:
+      - id: isort
+
+  # Formatter.
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black
+
+  # Linter (autofix).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  # QML formatting — the UI is QML, so it needs a formatter too, or Theme-token discipline
+  # drowns in whitespace diffs. qmlformat ships inside the PySide6 wheel already installed
+  # in .venv, so this is a local hook rather than another download.
+  - repo: local
+    hooks:
+      - id: qmlformat
+        name: qmlformat (PySide6)
+        entry: python scripts/hooks/run_qmlformat.py
+        language: system
+        files: '\.qml$'
+        pass_filenames: true
+
+      # Guards the one-way import rule from CONVENTIONS Part 2. Cheap, and catches the
+      # single most damaging mistake in this codebase (a business rule landing in gui/).
+      - id: layer-check
+        name: layer boundaries (core/ pure, gui/ ruleless)
+        entry: python scripts/hooks/check_layers.py
+        language: system
+        # .qml as well as .py: half of this hook is the ADR-002 Theme-token check, and with a
+        # .py-only filter a commit touching nothing but QML — the exact commit that adds a
+        # hard-coded colour — never ran it. The hook scans the whole tree anyway
+        # (pass_filenames: false), so this pattern only decides *when* it fires.
+        files: '^src/shopee_hunter/.*\.(py|qml)$'
+        pass_filenames: false
+
+  # NOTE: mypy is intentionally NOT a commit gate yet. The strict config lives in
+  # pyproject.toml ([tool.mypy]); run it manually / in CI while typing is filled in:
+  #     mypy src/shopee_hunter

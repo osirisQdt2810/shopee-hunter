@@ -1,0 +1,384 @@
+# PR pipeline: tests + lint -> Claude review -> gated auto-merge.
+#
+# Merge gate — a PR auto-merges ONLY when ALL of these hold:
+#   1. tests + lint are green on the PR's head commit,
+#   1b. the PR description carries every section of the PR template,
+#   2. the Claude review job produced an explicit APPROVE verdict for this run
+#      (missing/garbled verdict counts as BLOCKING — the gate fails closed),
+#   3. the PR carries the `automerge` label at merge time (the human/author
+#      intent switch: omit it and the pipeline is review-only, merge manually),
+#   4. the head commit at merge time is exactly the one this run reviewed
+#      (--match-head-commit blocks TOCTOU pushes mid-run).
+# Fork PRs cannot read the review secret, so the review job fails closed and
+# `needs` blocks the merge job; fork runs also get a read-only GITHUB_TOKEN.
+#
+# One-time repo setup (see the PR that introduced this file):
+#   - add the CLAUDE_CODE_OAUTH_TOKEN actions secret (`claude setup-token`),
+#   - create the `automerge` label.
+#
+# Installing the Claude GitHub App is deliberately NOT a third. Left to itself
+# the action trades an OIDC token for an App installation token, and that trade
+# has two failure modes this gate cannot live with. With no App installed it
+# 401s ("Claude Code is not installed on this repository") and the review job
+# dies before reading a line of the diff. With the App installed it still
+# refuses any PR whose workflow files differ from the default branch
+# (`error_code: workflow_not_found_on_default_branch` — anti-tampering), and
+# that refusal is not an error: the action logs a warning and RETURNS, so the
+# step goes green having reviewed nothing. Read literally, a workflow-editing PR
+# could never be reviewed — this file's own introducing PR included — and the
+# way it failed was the quiet way.
+#
+# Handing the action an explicit `github_token` skips the exchange outright:
+# `setupGitHubToken()` returns the override before it even asks for an OIDC
+# token, so neither failure mode is reachable. A review gate that can silently
+# not review is worse than one that cannot start.
+#
+# The cost is cosmetic here and real in claude.yml, which is why only this file
+# takes it: the review is authored by github-actions[bot] rather than
+# claude[bot], and a GITHUB_TOKEN push raises no workflow event. This job only
+# ever comments, so it never pushes anything that needed to be noticed.
+
+name: PR Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    branches: [main]
+
+concurrency:
+  group: pr-pipeline-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # One shell across all three OSes (the pytest command spans lines).
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        # The app SHIPS on Windows + macOS (PyInstaller bundles); Linux is here because
+        # it is the cheap, fast runner that gates every PR — and because it catches the
+        # case-sensitive-filesystem bugs the other two never will (a `Theme/theme.qml`
+        # import works on both shipping platforms and only fails here).
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.13"]
+        include:
+          # EVERY supported interpreter gets a leg. `requires-python = ">=3.11"`, and 3.12 as
+          # an untested middle is exactly where a typing/dataclass behaviour change hides: a
+          # missing version leg does not fail loudly, it fails on a user's machine.
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so pre-commit can diff against the PR base commit.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install Qt's Linux runtime libs
+        # PySide6 links libEGL/libGL/xkbcommon even for the `offscreen` platform plugin, and
+        # a GitHub ubuntu runner ships none of them. Without this the QML smoke tests fail
+        # with "could not load the Qt platform plugin" — which reads like a code bug.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libopengl0 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6
+      - name: Install the app and its dev tooling
+        # Editable install: the suite imports `shopee_hunter`, and the QML files must resolve
+        # from the package path exactly as they do at runtime.
+        run: pip install -e ".[dev]"
+      - name: Lint (pre-commit on the PR's changes, pinned hooks)
+        # Changed files only — mirrors the local staged-files hook behavior.
+        # One lint leg is enough; ubuntu avoids Windows CRLF noise.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        run: >-
+          pre-commit run --show-diff-on-failure
+          --from-ref ${{ github.event.pull_request.base.sha }}
+          --to-ref HEAD
+      - name: Run the offline test suite
+        # OFFLINE tier only — sockets are blocked by conftest and Qt runs headless. The live
+        # tier (real Shopee, real window) is a human's pre-PR step and is evidenced in the PR
+        # body instead; see ADR-008. The invocation lives in the script so this and ci.yml
+        # cannot drift apart.
+        run: bash scripts/run_tests.sh
+
+  pr-body:
+    name: PR description
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # A template only PRE-FILLS the web UI — `gh pr create --body` bypasses it entirely, and
+      # that is how most of this repo's PRs are opened. So the format is checked here rather
+      # than hoped for. Headings only: what goes UNDER them is a judgement call a grep cannot
+      # make, but a missing section is unambiguous.
+      - name: Require the template's sections
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Normalise before matching: the GitHub web editor stores CRLF and readily leaves a
+          # trailing space on a heading line. Neither changes what the heading SAYS, and a
+          # format check that fails on invisible characters teaches people to ignore it.
+          normalised=$(printf '%s' "$BODY" | tr -d '\r' | sed 's/[[:space:]]*$//')
+          missing=()
+          while IFS= read -r heading; do
+            [ -z "$heading" ] && continue
+            grep -qxF "$heading" <<< "$normalised" || missing+=("$heading")
+          done <<'HEADINGS'
+          ## Context
+          ## Content / Changes
+          ## Test Plan
+          ### Test Details
+          ### Test Output / Feature Demonstration
+          HEADINGS
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'PR description is missing required section(s):\n'
+            printf '  %s\n' "${missing[@]}"
+            printf '\nStart from .github/pull_request_template.md and keep every heading.\n'
+            printf 'A section that does not apply gets "N/A — <reason>", not a deletion.\n'
+            printf '\nAfter fixing the description, re-run this by toggling the automerge\n'
+            printf 'label — `edited` is deliberately not a trigger, so a typo fix does not\n'
+            printf 'restart five test legs and a Claude review.\n'
+            exit 1
+          fi
+          echo "All required sections present."
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install Qt's Linux runtime libs
+        # PySide6 links libEGL/libGL/xkbcommon even for the `offscreen` platform plugin, and
+        # a GitHub ubuntu runner ships none of them. Without this the QML smoke tests fail
+        # with "could not load the Qt platform plugin" — which reads like a code bug.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libopengl0 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6
+      - name: Install the app and its dev tooling
+        run: pip install -e ".[dev]"
+      - name: Measure coverage
+        # Its own job rather than a flag on the matrix: the five test legs exist to catch
+        # version- and OS-specific breakage and should stay as fast as possible, and coverage
+        # only needs measuring once. Deliberately NOT a merge gate — see requirements-dev.
+        run: bash scripts/run_tests.sh --cov=src/shopee_hunter --cov-report=xml --cov-report=term:skip-covered
+      - name: Report the coverage percentage
+        # The README badge is published from ci.yml (push to main); this only prints the number
+        # so a reviewer can see the effect of a PR without opening an external service.
+        #
+        # Codecov upload removed: it was refused with "Token required - not valid tokenless
+        # upload" on EVERY run, and `fail_ci_if_error: false` made that refusal look like
+        # success — the badge read "unknown" for weeks while the job was green. Restore it by
+        # adding a CODECOV_TOKEN secret and passing `token:`; do not restore it tokenless.
+        run: python scripts/coverage_badge.py coverage.xml /tmp/coverage-badge.json
+
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    env:
+      # Either credential works: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`,
+      # billed to the Claude subscription) or ANTHROPIC_API_KEY (console.anthropic.com,
+      # pay-as-you-go — independent of any claude.ai workspace/plan).
+      HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.value }}
+    steps:
+      - name: Fail closed when the review credential is missing
+        if: env.HAS_TOKEN != 'true'
+        run: |
+          echo "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is available (unset, or this is a fork PR). Refusing to skip review while auto-merge is possible."
+          exit 1
+      - name: Stamp when this review began
+        # Read by the verdict fallback below, which will only trust a VERDICT marker in a
+        # comment posted after this instant — see the reasoning there.
+        run: echo "REVIEW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Review the PR
+        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
+        env:
+          # Explicit gh auth: comments post as github-actions[bot], whose events
+          # can never retrigger workflows — no self-trigger loops.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          # The workflow's own token, so the action never attempts the App-token exchange
+          # (see the header). It carries exactly this job's `permissions:` block above —
+          # `issues: write` is what lets the review land as a PR comment.
+          github_token: ${{ github.token }}
+          # ONE credential, not two. An unset secret renders as an EMPTY STRING, so passing
+          # both made the action set ANTHROPIC_API_KEY="" whenever that secret was absent —
+          # and the SDK treats a present-but-blank api key as the credential to use rather
+          # than falling back to the OAuth token. It then fails to resolve authentication
+          # before making any request at all: 44ms, one turn, $0 spent, and a stack trace
+          # that names neither secret. Pass only the one this repo actually uses.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # OFF because it authenticates differently from the rest of the action: the
+          # classifier constructs `new Anthropic({ apiKey })` directly, which has no OAuth
+          # path, so with only CLAUDE_CODE_OAUTH_TOKEN set it throws "Could not resolve
+          # authentication" and fails the whole job -- in 88ms, having spent $0, while the
+          # perfectly good OAuth token sits unused. It defaults to true, so it has to be
+          # switched off explicitly by anyone authenticating the way this repo does.
+          classify_inline_comments: false
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+
+            House rules to enforce (this is a PySide6/QML desktop app — read
+            .claude/CONVENTIONS.md Part 2 and .claude/DECISIONS.md in the checkout for the
+            full rubric, and cite ADR numbers when a change contradicts one):
+            - LAYERS, one-way only. `core/` is pure: it must not import PySide6, httpx,
+              sqlite3, playwright, or any sibling layer. `sources|storage|services` may
+              import `core/` and must NEVER import `gui/`. `gui/` (Python and QML) must hold
+              NO business rule — a price comparison, discount threshold or "is this a good
+              deal" judgement in a bridge or a .qml file is blocking. `core/deals.py` is the
+              only place a Deal may be created (ADR-005).
+            - ALL Shopee access goes through a `SourceAdapter` (ADR-004); wire parsing lives
+              in `sources/parse.py` as a pure function pinned by a CAPTURED fixture. An
+              adapter must not bypass the seam's rate limiting or retry.
+            - FAILURE PATHS ARE TYPED. A blocked/captcha/`error: 10` response must raise
+              `SourceBlocked`; a changed wire field must raise `ParseError` naming the field;
+              a missing credential `SourceAuthRequired`. Returning an empty list to mean
+              "blocked" is blocking — it makes the app report "no deals" during a live sale.
+            - THREADING (ADR-003): nothing blocks the GUI thread. Async work runs on the
+              worker-thread loop and crosses back only through `gui/tasks.py::run_async`. No
+              QThread subclass, no `asyncio.run` in a slot, no Qt object touched off-thread.
+            - RATE LIMITING IS NOT OPTIONAL (ADR-007): every new request path passes the
+              token bucket; retries stay few and slow; `SourceBlocked` triggers `penalise()`;
+              no unbounded pagination or keyword fan-out.
+            - QML uses only `Theme.*` tokens — a literal colour, radius, duration or font
+              size in a component is a defect (ADR-002). A new QML/resource file must be
+              added to BOTH PyInstaller specs in `packaging/` in the same change.
+            - CROSS-PLATFORM: `pathlib` + `platformdirs` only; no hand-written `~/Library` or
+              `%APPDATA%`; platform-specific code behind one function with a working
+              fallback. New deps need macOS arm64/x86_64 + Windows wheels, and Playwright
+              must stay a lazily-imported optional extra.
+            - SECRETS: no hard-coded cookie, token or API key anywhere, including tests;
+              nothing secret may reach a log (check `core/logging.py` redaction covers any
+              new key name) or `AppSettings.save()`.
+            - TESTS, two tiers (ADR-008): new pure logic and new parsing need OFFLINE tests
+              against a captured fixture; a new adapter needs a `@pytest.mark.live` test. For
+              a change touching `sources/`, `services/` or `gui/`, the PR body must contain
+              REAL live evidence (a `live_check.py` run or a UI screenshot) — "tests pass" is
+              not a test plan. Flag its absence.
+            - New behavior needs tests; changed behavior needs updated tests.
+
+            Inspect the change with `gh pr diff` and `gh pr view`, and read the surrounding
+            code in the checkout for context. Judge correctness (state a concrete failing
+            scenario for every defect you claim), architectural fit, test coverage, and the
+            house rules above.
+
+            Post your findings as a single `gh pr comment`: for a clean PR, a short summary of
+            what you checked; for a defective PR, each blocking issue with file:line, the
+            concrete failure scenario, and a suggested fix.
+
+            MANDATORY: the comment's LAST line must be exactly one of
+              VERDICT: APPROVE
+              VERDICT: BLOCKING
+            (the merge gate machine-reads it). Additionally, also write the same word to the
+            verdict file: `echo APPROVE > "$RUNNER_TEMP/verdict"` or
+            `echo BLOCKING > "$RUNNER_TEMP/verdict"`.
+            If neither the marker nor the file exists, the pipeline treats the review as BLOCKING.
+          # Opus 5 explicitly: the action's default tier is weaker than what this
+          # gate needs — the reviewer is the only thing standing between a bad diff
+          # and an automatic merge.
+          claude_args: '--model claude-opus-5 --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(echo:*)"'
+      - name: Publish verdict
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          v=$(cat "$RUNNER_TEMP/verdict" 2>/dev/null || true)
+          if [ -z "$v" ]; then
+            echo "No verdict file — falling back to the VERDICT marker in the review bot's comments."
+            # Restricted two ways, because this marker IS the merge instruction.
+            #
+            # By AUTHOR: only an identity a human cannot post under. Since the review now
+            # comments as github-actions[bot] (see the header) that login has to be accepted
+            # — but note it is weaker than claude[bot] was, because *any* workflow in this
+            # repo can post as github-actions[bot]. claude[bot] stays listed so installing
+            # the App later cannot silently break the fallback.
+            #
+            # By TIME: only a comment newer than this run's review step. That is what stops a
+            # stale APPROVE — from an earlier run, or planted by a job on this same PR —
+            # being harvested to merge a commit it was never about. Without it the author
+            # restriction alone would be close to meaningless.
+            #
+            # --paginate because a page holds 30 comments and the verdict is the newest.
+            # Piped through real `jq` rather than gh's `--jq`, which takes only a query and
+            # has no `--arg`: passing one silently mangles the whole invocation.
+            v=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                | jq -r --arg since "$REVIEW_STARTED_AT" '.[]
+                        | select(.created_at >= $since)
+                        | select(.user.login == "github-actions[bot]"
+                                 or .user.login == "claude[bot]"
+                                 or .user.login == "claude")
+                        | .body' \
+                | grep -oE 'VERDICT: (APPROVE|BLOCKING)' | tail -1 | awk '{print $2}' || true)
+          fi
+          if [ "$v" != "APPROVE" ]; then v=BLOCKING; fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+          echo "Review verdict: $v"
+
+  merge:
+    name: Auto-merge
+    needs: [test, pr-body, review]
+    if: needs.review.outputs.verdict == 'APPROVE' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge when the automerge label is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          # Pin the merge to the exact commit this run tested and reviewed.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Re-read labels NOW — the event payload is stale by the time review finishes.
+          labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name')
+          if printf '%s\n' "$labels" | grep -qx automerge; then
+            gh pr merge "$PR" --repo "$REPO" --merge --match-head-commit "$HEAD_SHA"
+            echo "PR #$PR merged at $HEAD_SHA."
+          else
+            echo "No automerge label — review is APPROVE but merging is left to a human."
+          fi

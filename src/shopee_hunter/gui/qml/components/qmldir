@@ -1,0 +1,14 @@
+module components
+AuroraBackground 1.0 AuroraBackground.qml
+Badge 1.0 Badge.qml
+DealCard 1.0 DealCard.qml
+EmptyState 1.0 EmptyState.qml
+GlassPanel 1.0 GlassPanel.qml
+GradientButton 1.0 GradientButton.qml
+NavItem 1.0 NavItem.qml
+ScoreRing 1.0 ScoreRing.qml
+Sparkline 1.0 Sparkline.qml
+SearchField 1.0 SearchField.qml
+StatTile 1.0 StatTile.qml
+TitleBar 1.0 TitleBar.qml
+Toast 1.0 Toast.qml
