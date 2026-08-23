@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, get_args, get_origin
 
 from platformdirs import PlatformDirs
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -272,6 +273,7 @@ class AppSettings(PersistedModel):
         cls,
         *,
         bundled: Optional[Path] = None,
+        secrets: Optional[Path] = None,
         user: Optional[Path] = None,
         env: Optional[dict[str, str]] = None,
     ) -> AppSettings:
@@ -279,6 +281,12 @@ class AppSettings(PersistedModel):
 
         Args:
             bundled: The repo's ``config/settings.toml`` (optional; ships defaults).
+            secrets: ``secrets.toml`` — credentials, kept out of the file ``save()`` writes.
+                Documented in five places and read by nothing until now: ``secrets_file()``
+                had no call sites, so a user who followed ``save()``'s own docstring and put
+                their cookie there still got ``SourceAuthRequired`` with no explanation.
+                Passed explicitly rather than defaulted to the real path, so a test cannot
+                accidentally pick up the developer's own credentials.
             user: The user's own file (optional; written by the Settings view).
             env: Environment mapping; defaults to ``os.environ``.
 
@@ -286,7 +294,7 @@ class AppSettings(PersistedModel):
             ConfigError: A layer is unreadable, malformed, or contradicts a validator.
         """
         merged: dict[str, Any] = {}
-        for path in (bundled, user):
+        for path in (bundled, secrets, user):
             if path is not None and path.is_file():
                 _deep_update(merged, _read_toml(path))
         _deep_update(merged, _env_overrides(os.environ if env is None else env))
@@ -335,21 +343,65 @@ def _deep_update(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, An
     return base
 
 
-def _coerce(raw: str) -> Any:
-    """Best-effort scalar parse for an env value (bool → int → float → csv → str)."""
-    lowered = raw.strip().lower()
-    if lowered in {"true", "1", "yes", "on"}:
+def _field_annotation(path: Sequence[str]) -> Any:
+    """The declared type of ``AppSettings`` at a dotted env path, or ``None`` if unknown."""
+    model: Any = AppSettings
+    annotation: Any = None
+    for part in path:
+        fields = getattr(model, "model_fields", None)
+        if not fields or part not in fields:
+            return None
+        annotation = fields[part].annotation
+        model = annotation
+        # Unwrap Optional[X] so `profile_dir: Optional[Path]` resolves like `Path`.
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            model = args[0]
+    return annotation
+
+
+def _is_list(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    if origin in (list, tuple, set, frozenset):
         return True
-    if lowered in {"false", "0", "no", "off"}:
-        return False
-    for caster in (int, float):
-        try:
-            return caster(raw)
-        except ValueError:
-            continue
-    if "," in raw:
-        return [part.strip() for part in raw.split(",") if part.strip()]
-    return raw
+    return any(_is_list(arg) for arg in get_args(annotation))
+
+
+def _coerce(raw: str, annotation: Any = None) -> Any:
+    """Parse an env value AGAINST the field it is destined for.
+
+    The first version guessed from the string alone, and because ``load()`` turns any
+    mismatch into a fatal ``ConfigError``, a wrong guess did not degrade — it stopped the app
+    starting. Three real cases:
+
+    * ``SALEHUNTER_SOURCES__ORDER=web`` produced ``"web"`` for a ``list[str]``;
+    * a numeric affiliate ``APP_ID`` produced an ``int`` for ``app_id: str``;
+    * ANY string containing a comma became a list — and the default user agent contains
+      ``", like Gecko"``, so overriding it was guaranteed to fail.
+
+    With the annotation in hand the only conversions worth making by hand are the two
+    pydantic cannot do from a bare string: splitting a list, and reading the spoken forms of
+    a boolean. Everything else is handed over as a string for pydantic to coerce, which is
+    both more permissive and more correct than guessing.
+    """
+    text = raw.strip()
+    if _is_list(annotation):
+        return [part.strip() for part in text.split(",") if part.strip()]
+
+    lowered = text.lower()
+    if annotation is bool:
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        return text
+
+    if annotation is None:
+        # An unknown path: it will be ignored by `extra="ignore"` anyway, so the cheapest
+        # correct thing is to leave it alone rather than invent a type for it.
+        return text
+
+    return text
 
 
 def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
@@ -366,7 +418,7 @@ def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
         cursor = out
         for part in path[:-1]:
             cursor = cursor.setdefault(part, {})
-        cursor[path[-1]] = _coerce(value)
+        cursor[path[-1]] = _coerce(value, _field_annotation(path))
     return out
 
 

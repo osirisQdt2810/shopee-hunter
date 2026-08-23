@@ -257,3 +257,65 @@ def _with_price(product, price):
     from dataclasses import replace
 
     return replace(product, price=price)
+
+
+class TestSnapshotIdempotency:
+    """The UNIQUE constraint has to actually bite, or the deal engine goes blind.
+
+    `observed_at` is `Product.captured_at`, defaulted to `datetime.now(UTC)` at parse time,
+    so two scans never produced the same value and "idempotent per (listing, timestamp)" was
+    vacuous. At the mega-sale cadence of one scan per five minutes that is 288 rows per
+    listing per day; `core/deals.py` medians over ninety days, so the reference price
+    converges on today's sale price and genuine discounts stop scoring — during the one event
+    the app exists for.
+    """
+
+    async def test_a_repeated_scan_inside_the_bucket_writes_once(
+        self, repository, product_factory
+    ):
+        from dataclasses import replace
+        from datetime import timedelta
+
+        base = product_factory()
+        # Five scans five minutes apart — the real mega-sale cadence.
+        for minutes in (0, 5, 10, 15, 20):
+            moment = base.captured_at + timedelta(minutes=minutes)
+            await repository.record_snapshots([replace(base, captured_at=moment)])
+
+        history = await repository.history_for(base.item_id, base.shop_id)
+
+        assert len(history) == 1, (
+            "five scans inside one hour must leave one observation, not five — otherwise "
+            "today outvotes the ninety days the median is taken over"
+        )
+        await repository.close()
+
+    async def test_a_later_hour_is_a_new_observation(self, repository, product_factory):
+        """Bucketing must not stop the history recording that the price moved."""
+        from dataclasses import replace
+        from datetime import timedelta
+
+        base = product_factory()
+        for hours in (0, 1, 2):
+            moment = base.captured_at + timedelta(hours=hours)
+            await repository.record_snapshots([replace(base, captured_at=moment)])
+
+        history = await repository.history_for(base.item_id, base.shop_id)
+
+        assert len(history) == 3
+        await repository.close()
+
+    def test_the_bucket_is_stable_and_utc(self):
+        from datetime import datetime, timedelta, timezone
+
+        from shopee_hunter.storage.repository import bucket_observed_at
+
+        ict = timezone(timedelta(hours=7))
+        moment = datetime(2026, 12, 12, 21, 47, 33, tzinfo=ict)
+
+        bucketed = bucket_observed_at(moment)
+
+        assert bucketed.tzinfo is not None
+        assert bucketed.minute == 0 and bucketed.second == 0
+        # Same instant expressed in another zone must land in the same bucket.
+        assert bucket_observed_at(moment.astimezone(UTC)) == bucketed

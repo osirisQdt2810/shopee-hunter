@@ -20,6 +20,26 @@ from ..core.logging import get_logger
 from ..core.models import Currency, Money, PriceSnapshot, Product, Watch
 from . import db
 
+# How coarse a snapshot's timestamp is before it reaches the UNIQUE constraint.
+#
+# The constraint on (shop_id, item_id, observed_at) is supposed to make a re-scan a no-op,
+# but `observed_at` is `Product.captured_at`, which defaults to `datetime.now(UTC)` at PARSE
+# time — so two scans never collided and the idempotency was vacuous. At the mega-sale
+# cadence of one scan per five minutes that is 288 rows per listing per day, and since
+# `core/deals.py` takes the median over ninety days, the "reference price" converges on
+# today's sale price: the engine goes blind exactly during a mega sale, which is the one
+# moment it exists for. Bucketing to the hour caps a listing at 24 rows a day and makes a
+# retry genuinely idempotent, while still recording that the price moved today.
+SNAPSHOT_BUCKET = timedelta(hours=1)
+
+
+def bucket_observed_at(moment: datetime) -> datetime:
+    """Truncate an observation time to the snapshot bucket, in UTC."""
+    aware = moment.astimezone(UTC) if moment.tzinfo else moment.replace(tzinfo=UTC)
+    seconds = int(SNAPSHOT_BUCKET.total_seconds())
+    epoch = int(aware.timestamp()) // seconds * seconds
+    return datetime.fromtimestamp(epoch, tz=UTC)
+
 
 def _iso(moment: datetime) -> str:
     """Serialise a timestamp as UTC ISO-8601.
@@ -64,7 +84,12 @@ class Repository:
 
     # -- price history ----------------------------------------------------------
     async def record_snapshots(self, products: Iterable[Product]) -> int:
-        """Persist one observation per product. Idempotent per (listing, timestamp).
+        """Persist one observation per product, at most one per listing per hour.
+
+        Genuinely idempotent, unlike the first version: `observed_at` is bucketed (see
+        `SNAPSHOT_BUCKET`) before it reaches the UNIQUE constraint, so a retried scan — or a
+        second scan inside the same hour — collides and is ignored instead of fabricating a
+        data point that drags the median toward today's price.
 
         Also refreshes the listing metadata row, so the UI can render a watched item's name
         and shop without another request.
@@ -79,7 +104,7 @@ class Repository:
                 p.item_id,
                 p.price.amount,
                 p.price.currency.value,
-                _iso(p.captured_at),
+                _iso(bucket_observed_at(p.captured_at)),
                 int(p.is_flash_sale),
             )
             for p in products

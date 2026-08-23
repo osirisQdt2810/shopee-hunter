@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Property, QObject, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
@@ -277,33 +277,62 @@ class AppBridge(QObject):
             self._current_task.cancel()
             self._set_status("Cancelling…")
 
-    @Slot(str, int, float, float, str, bool)
+    @Slot(str, str, str, str, str, bool)
     def addWatch(
         self,
         keyword: str,
-        max_price: int,
-        min_discount: float,
-        min_rating: float,
+        max_price: str,
+        min_discount: str,
+        min_rating: str,
         exclude_terms: str,
         official_only: bool,
     ) -> None:
-        """Create a watch from the QML form. Validation errors come back as a toast."""
+        """Create a watch from the QML form. Validation errors come back as a toast.
+
+        The numeric fields arrive as the raw TEXT the user typed, and an empty one is simply
+        omitted so `Watch`'s own defaults apply. The form used to supply them itself —
+        `parseFloat(minDiscount.text) || 20` and `|| 0` — which duplicated
+        `Watch.min_discount_pct = 20.0` in a `.qml` file and *contradicted*
+        `min_rating = 4.0`, so the two would drift on the next tuning pass. `||` also treats
+        a typed `0` as absent, which made "no minimum discount" impossible to express.
+        """
         keyword = keyword.strip()
         if not keyword:
             self.toast.emit("A watch needs a keyword", TOAST_WARN)
             return
+
+        def _number(text: str) -> Optional[float]:
+            text = text.strip()
+            if not text:
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                return None
+
+        ceiling = _number(max_price)
+        discount = _number(min_discount)
+        rating = _number(min_rating)
+
+        # Only pass what the user actually filled in; core owns every default.
+        optional: dict[str, Any] = {}
+        if discount is not None:
+            optional["min_discount_pct"] = max(0.0, discount)
+        if rating is not None:
+            # An explicit 0 means "no rating floor"; a blank field means "use the default".
+            optional["min_rating"] = rating if rating > 0 else None
+
         watch = Watch(
             watch_id=f"w-{uuid.uuid4().hex[:8]}",
             keyword=keyword,
-            max_price=Money(max_price) if max_price > 0 else None,
-            min_discount_pct=max(0.0, min_discount),
-            min_rating=min_rating if min_rating > 0 else None,
+            max_price=Money(int(ceiling)) if ceiling and ceiling > 0 else None,
             exclude_terms=tuple(
                 term.strip()
                 for term in exclude_terms.replace(";", ",").split(",")
                 if term.strip()
             ),
             official_only=official_only,
+            **optional,
         )
 
         async def coro() -> None:

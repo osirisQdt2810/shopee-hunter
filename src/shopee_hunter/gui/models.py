@@ -14,6 +14,7 @@ from typing import Any, ClassVar, Optional
 
 from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt, Signal, Slot
 
+from ..core.deals import score_grade
 from ..core.models import Confidence, Deal, DealFlag, Money, PriceSnapshot, Watch
 
 # A shared invalid index for the default argument: constructing one per call in a signature
@@ -103,6 +104,10 @@ class DealListModel(QAbstractListModel):
     # means re-implementing CLAIM_INFLATION_TOLERANCE_PCT in QML where no test can see it.
     ClaimInflatedRole = Qt.UserRole + 22
 
+    # The engine's own banding of the score. The view colours a grade; it does not decide
+    # what counts as a good deal.
+    ScoreGradeRole = Qt.UserRole + 23
+
     countChanged = Signal()
 
     _ROLE_NAMES: ClassVar[dict[int, bytes]] = {
@@ -128,6 +133,7 @@ class DealListModel(QAbstractListModel):
         WatchRole: b"watchId",
         FlashRole: b"flash",
         ClaimInflatedRole: b"claimInflated",
+        ScoreGradeRole: b"scoreGrade",
     }
 
     def __init__(self, parent: Optional[Any] = None) -> None:
@@ -204,6 +210,8 @@ class DealListModel(QAbstractListModel):
             return product.is_flash_sale
         if role == self.ClaimInflatedRole:
             return DealFlag.CLAIM_INFLATED in deal.flags
+        if role == self.ScoreGradeRole:
+            return str(score_grade(deal.score))
         return None
 
     # -- population -------------------------------------------------------------

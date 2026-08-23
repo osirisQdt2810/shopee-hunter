@@ -325,3 +325,43 @@ class TestNoSilentDefaults:
         products = parse_search_response({"error": None, "items": [good, bad]})
 
         assert [p.item_id for p in products] == [1]
+
+
+class TestFlashSaleFailsLoudly:
+    """The flash path had the swallow-and-default shape the search path was fixed for.
+
+    `data.get("items") or []`, a bare `except ParseError: continue`, and no "nothing parsed"
+    guard. At 21:00 on 12.12 a renamed field made every entry fail, the chain recorded a
+    SUCCESS with zero refusals and zero failures, and the UI said "0 flash deals" during the
+    busiest slot of the year.
+    """
+
+    def test_an_absent_items_key_raises(self):
+        with pytest.raises(ParseError, match="items"):
+            parse_flash_sale_response({"error": None, "data": {}})
+
+    def test_an_empty_list_is_a_genuine_quiet_market(self):
+        assert parse_flash_sale_response({"error": None, "data": {"items": []}}) == []
+
+    def test_a_page_where_nothing_parses_raises(self):
+        broken = [
+            item_basic(itemid=1)["item_basic"],
+            item_basic(itemid=2)["item_basic"],
+        ]
+        for entry in broken:
+            entry["raw_discount"] = "52%"
+
+        with pytest.raises(ParseError, match="none of 2"):
+            parse_flash_sale_response({"error": None, "data": {"items": broken}})
+
+    def test_one_bad_entry_still_costs_only_that_entry(self):
+        good = item_basic(itemid=1)["item_basic"]
+        bad = item_basic(itemid=2)["item_basic"]
+        bad["raw_discount"] = "52%"
+
+        products = parse_flash_sale_response(
+            {"error": None, "data": {"items": [good, bad]}}
+        )
+
+        assert [p.item_id for p in products] == [1]
+        assert products[0].is_flash_sale, "the endpoint guarantees the flag"

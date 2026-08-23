@@ -162,7 +162,7 @@ Item {
                     onClicked: {
                         if (!view.bridge)
                             return;
-                        view.bridge.addWatch(keyword.text, parseInt(maxPrice.text) || 0, parseFloat(minDiscount.text) || 20, parseFloat(minRating.text) || 0, exclude.text, officialToggle.checked);
+                        view.bridge.addWatch(keyword.text, maxPrice.text, minDiscount.text, minRating.text, exclude.text, officialToggle.checked);
                         keyword.text = "";
                         maxPrice.text = "";
                         exclude.text = "";

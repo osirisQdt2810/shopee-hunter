@@ -355,23 +355,38 @@ def parse_flash_sale_response(
     """
     check_api_error(payload, source=source)
     data = payload.get("data")
-    items: Iterable[Any] = []
-    if isinstance(data, Mapping):
-        items = data.get("items") or []
-    elif payload.get("items"):
-        items = payload["items"]
+    raw = data.get("items") if isinstance(data, Mapping) else payload.get("items")
+    if raw is None:
+        # Same rule as parse_search_response: an absent list is a shape change, an EMPTY one
+        # is a genuine "no flash sale running". Returning [] for both is how the app would
+        # report "0 flash deals" at 21:00 on 12.12 while the endpoint was answering fine.
+        raise ParseError("flash-sale response has no 'items' key", source=source)
+    items: Iterable[Any] = raw
+    entries = list(items)
+    if not entries:
+        return []
 
     products: list[Product] = []
-    for entry in items:
+    failures: list[str] = []
+    for entry in entries:
         if not isinstance(entry, Mapping):
+            failures.append(f"non-object entry: {type(entry).__name__}")
             continue
         try:
             product = parse_item(
                 entry, currency=currency, captured_at=captured_at, source=source
             )
-        except ParseError:
+        except ParseError as exc:
+            failures.append(str(exc))
             continue
         products.append(product if product.is_flash_sale else _force_flash(product))
+
+    if not products:
+        raise ParseError(
+            f"none of {len(entries)} flash-sale items could be parsed; first reason: "
+            f"{failures[0] if failures else 'unknown'}",
+            source=source,
+        )
     return products
 
 

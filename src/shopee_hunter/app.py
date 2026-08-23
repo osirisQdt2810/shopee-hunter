@@ -82,6 +82,7 @@ def load_settings(
     """Build the settings tree from every layer, applying CLI overrides last."""
     settings = AppSettings.load(
         bundled=BUNDLED_SETTINGS if BUNDLED_SETTINGS.is_file() else None,
+        secrets=AppPaths.secrets_file(),
         user=AppPaths.settings_file(),
     )
     if demo or envs.DEMO_MODE:

@@ -103,6 +103,10 @@ QtObject {
     property bool nativeBlur: false
     readonly property color negative: "#FF5A6E"
 
+    // The film grain over the aurora. Low enough to read as texture rather than dirt; a
+    // token because it is a look, and the only other place it could live is a magic 0.022.
+    readonly property real noiseOpacity: 0.022
+
     // Surfaces that were hand-mixing their own near-black / near-white and so opted out of a
     // restyle. Each one is the *only* definition of that surface, so changing the palette
     // here now actually moves them.
@@ -156,14 +160,20 @@ QtObject {
 
     // ------------------------------------------------------------------ misc
     // Score → colour, in one place, so the ring, the badge and the sparkline agree.
-    function scoreColor(score) {
-        if (score >= 75)
+    // Grade -> colour. The BANDS live in core/deals.py (`score_grade`), because "what counts
+    // as a good deal" is the judgement this whole app exists to make and a .qml file is
+    // somewhere no test can reach it. This function only chooses the paint.
+    function gradeColor(grade) {
+        switch (grade) {
+        case "excellent":
             return positive;
-        if (score >= 55)
+        case "good":
             return accent;
-        if (score >= 35)
+        case "fair":
             return caution;
-        return negative;
+        default:
+            return negative;
+        }
     }
 
     // Tier 0..4 → the header's intensity. Returns an alpha, so a mega sale glows and a quiet

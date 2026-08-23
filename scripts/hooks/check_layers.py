@@ -16,7 +16,8 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = REPO_ROOT / "src" / "shopee_hunter"
+PACKAGE_NAME = "shopee_hunter"
+PACKAGE = REPO_ROOT / "src" / PACKAGE_NAME
 
 CORE_FORBIDDEN = ("PySide6", "httpx", "sqlite3", "playwright")
 IO_LAYERS = ("sources", "storage", "services")
@@ -76,8 +77,18 @@ def top_level_imports(path: Path) -> list[tuple[int, str]]:
                 (node.lineno, alias.name.split(".")[0]) for alias in node.names
             )
         elif isinstance(node, ast.ImportFrom):
-            name = (node.module or "").split(".")[0]
-            found.append((node.lineno, f".{name}" if node.level else name))
+            # The FULL dotted module, not just its root. Reducing to the root meant
+            # `from shopee_hunter.gui.bridge import AppBridge` inside services/ resolved to
+            # "shopee_hunter", which matches neither ".gui" nor "PySide6" — so the hook and
+            # the test both passed while the one-way rule was broken. An absolute import of
+            # our own package is normalised to the relative form so one rule covers both.
+            module = node.module or ""
+            if node.level:
+                found.append((node.lineno, f".{module}" if module else "."))
+            elif module == PACKAGE_NAME or module.startswith(f"{PACKAGE_NAME}."):
+                found.append((node.lineno, "." + module[len(PACKAGE_NAME) + 1 :]))
+            else:
+                found.append((node.lineno, module))
     return found
 
 
@@ -94,7 +105,10 @@ def main() -> int:
                     f"{path.relative_to(REPO_ROOT)}:{lineno}: core/ must not import {module!r} — "
                     f"core/ is pure logic; move the I/O to sources/, storage/ or services/"
                 )
-            if module in {f".{layer}" for layer in (*IO_LAYERS, "gui")}:
+            if any(
+                module == f".{layer}" or module.startswith(f".{layer}.")
+                for layer in (*IO_LAYERS, "gui")
+            ):
                 violations.append(
                     f"{path.relative_to(REPO_ROOT)}:{lineno}: core/ must not import {module!r} — "
                     f"core/ depends on nothing else in the package"
@@ -103,7 +117,11 @@ def main() -> int:
     for layer in IO_LAYERS:
         for path in (PACKAGE / layer).rglob("*.py"):
             for lineno, module in top_level_imports(path):
-                if module in (".gui", "PySide6"):
+                if (
+                    module == "PySide6"
+                    or module == ".gui"
+                    or module.startswith(".gui.")
+                ):
                     violations.append(
                         f"{path.relative_to(REPO_ROOT)}:{lineno}: {layer}/ must not import "
                         f"{module!r} — orchestration has to stay callable from a script"

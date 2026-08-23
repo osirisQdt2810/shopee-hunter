@@ -16,7 +16,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, Slot
 
 from ..core.logging import get_logger
 
@@ -42,9 +42,29 @@ class AsyncTask(QObject):
         self._future = future
         future.add_done_callback(self._on_done)
 
-    def _on_done(self, future: Any) -> None:
-        # Runs on the ASYNCIO thread. Emitting a signal is the only safe thing to do here —
-        # Qt marshals it to whichever thread the receiver lives on.
+    def _on_done(self, _future: Any) -> None:
+        """Hand the outcome to the GUI thread. Never emits from here.
+
+        Two threads reach this. Normally it is the asyncio thread, once the coroutine
+        finishes. But ``add_done_callback`` invokes its callback **immediately, on the
+        calling thread** when the future is already done — and for a fast coroutine (a cache
+        hit, the fixture source, demo mode) that is exactly what happens, inside ``submit``,
+        before it has even returned the task to its caller. Emitting there sent the result
+        into zero connections: the caller had not connected ``finished`` yet, so the result
+        vanished and ``busy`` stayed true forever.
+
+        A queued invocation fixes both cases at once. The task lives on the GUI thread, so
+        Qt posts this as an event and runs it the next time that thread's event loop turns —
+        which is necessarily after ``submit`` returned and the caller connected.
+        """
+        QMetaObject.invokeMethod(self, "_emit_outcome", Qt.QueuedConnection)
+
+    @Slot()
+    def _emit_outcome(self) -> None:
+        """Emit exactly one of finished/failed/cancelled, on the GUI thread."""
+        future = self._future
+        if future is None:
+            return
         if future.cancelled():
             self.cancelled.emit()
             return

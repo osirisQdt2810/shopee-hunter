@@ -36,6 +36,7 @@ Item {
     property string referenceText: ""
     property string savingsText: ""
     property real score: 0
+    property string scoreGrade: "poor"
     property string shopName: ""
     property string soldText: ""
     property var warnings: []
@@ -217,7 +218,7 @@ Item {
                     // computed in core, exposed on the model and assigned to this component,
                     // then never read — so a drop the engine had rejected as not genuine
                     // printed in exactly the same confident colour as one it had verified.
-                    color: card.genuine ? Theme.scoreColor(card.score) : Theme.caution
+                    color: card.genuine ? Theme.gradeColor(card.scoreGrade) : Theme.caution
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.Bold
@@ -321,10 +322,11 @@ Item {
 
             ScoreRing {
                 anchors.horizontalCenter: parent.horizontalCenter
+                grade: card.scoreGrade
                 score: card.score
             }
             Sparkline {
-                lineColor: Theme.scoreColor(card.score)
+                lineColor: Theme.gradeColor(card.scoreGrade)
                 points: card.history
                 width: parent.width
             }

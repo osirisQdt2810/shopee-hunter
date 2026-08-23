@@ -233,7 +233,12 @@ class ShopeeBrowserSource(SourceAdapter):
                 f"layout change)",
                 source=self.id,
             ) from exc
-        except SourceBlocked:
+        except (SourceBlocked, SourceAuthRequired):
+            # SourceAuthRequired is a SIBLING of SourceBlocked, not a subclass, so listing
+            # only the latter let `_assert_not_interstitial`'s verification-wall error fall
+            # into the catch-all below and come back out as SourceUnavailable. `_guarded`
+            # then retried it three times against the wall — without penalising the bucket,
+            # contra ADR-007 — and threw away the one message that tells the user to sign in.
             raise
         except Exception as exc:  # playwright raises its own Error type
             raise SourceUnavailable(

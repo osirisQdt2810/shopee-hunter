@@ -12,6 +12,7 @@ Item {
     id: ring
 
     property real animatedScore: 0
+    property string grade: "poor"
     property real score: 0
     property int thickness: 4
 
@@ -61,7 +62,7 @@ Item {
             ctx.stroke();
 
             if (sweep > 0.01) {
-                ctx.strokeStyle = Theme.scoreColor(ring.score);
+                ctx.strokeStyle = Theme.gradeColor(ring.grade);
                 ctx.beginPath();
                 ctx.arc(cx, cy, r, start, start + sweep);
                 ctx.stroke();

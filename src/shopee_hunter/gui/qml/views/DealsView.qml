@@ -220,6 +220,7 @@ Item {
                     referenceText: model.referenceText
                     savingsText: model.savingsText
                     score: model.score
+                    scoreGrade: model.scoreGrade
                     shopName: model.shopName
                     soldText: model.soldText
                     warnings: model.warnings

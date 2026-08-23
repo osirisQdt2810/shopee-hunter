@@ -15,6 +15,7 @@ import itertools
 import statistics
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Optional
 
 from .models import (
@@ -150,6 +151,38 @@ _CONFIDENCE_WEIGHT: dict[Confidence, float] = {
     Confidence.MEDIUM: 0.9,
     Confidence.HIGH: 1.0,
 }
+
+
+class ScoreGrade(StrEnum):
+    """How good a deal's score is, as a name the UI can render without judging.
+
+    The bands lived in `Theme.qml` as `score >= 75 / 55 / 35`, which made "what counts as a
+    good deal" a decision taken in a `.qml` file that no test could reach — the same mistake
+    `tone_for_tier` was extracted to avoid. Retuning `score_deal` would silently shift what
+    the colours meant, because the thresholds were nowhere near the scoring they describe.
+    """
+
+    EXCELLENT = "excellent"
+    GOOD = "good"
+    FAIR = "fair"
+    POOR = "poor"
+
+
+# Lower bound of each grade, strongest first. Beside `score_deal` on purpose: these numbers
+# are only meaningful against the composition that produces them.
+SCORE_BANDS: tuple[tuple[float, ScoreGrade], ...] = (
+    (75.0, ScoreGrade.EXCELLENT),
+    (55.0, ScoreGrade.GOOD),
+    (35.0, ScoreGrade.FAIR),
+)
+
+
+def score_grade(score: float) -> ScoreGrade:
+    """Band a 0–100 score. The UI colours the grade; it does not pick the boundaries."""
+    for floor, grade in SCORE_BANDS:
+        if score >= floor:
+            return grade
+    return ScoreGrade.POOR
 
 
 def score_deal(

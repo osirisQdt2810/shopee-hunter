@@ -22,6 +22,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "src") not in sys.path:
@@ -90,18 +91,16 @@ async def run(args: argparse.Namespace) -> int:
                 f"https://{settings.storefront.domain}/search?keyword={args.keyword}",
             )
         elif args.source == "browser":
-            payload = await adapter._get_json(
-                "/api/v4/search/search_items",
-                {
-                    "by": "relevancy",
-                    "keyword": args.keyword,
-                    "limit": 60,
-                    "newest": 0,
-                    "order": "desc",
-                    "page_type": "search",
-                    "scenario": "PAGE_GLOBAL_SEARCH",
-                    "version": 2,
-                },
+            # Through `_capture`, not `_get_json`: the browser adapter has no such method,
+            # so this path raised AttributeError and had therefore never once run. It
+            # matters more than it looks — the web path is the one Shopee blocks without
+            # cookies, so the browser is the ONLY route to a real capture, which means the
+            # fixtures ADR-008 requires to be captured were in practice hand-written.
+            from shopee_hunter.sources.shopee_browser import SEARCH_API, SEARCH_PAGE
+
+            payload = await adapter._capture(
+                SEARCH_PAGE.format(keyword=quote_plus(args.keyword), page=0),
+                SEARCH_API,
             )
         else:
             print(

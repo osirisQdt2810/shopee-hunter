@@ -102,7 +102,13 @@ Item {
     // Fine noise breaks up the banding a large smooth gradient shows on 8-bit panels.
     Canvas {
         anchors.fill: parent
-        opacity: 0.022
+        opacity: Theme.noiseOpacity
+
+        // Threaded, because this loop is ~117k iterations at 1440x900 and every one of them
+        // calls Math.random(), Qt.rgba() and fillRect(). On the GUI thread that is hundreds
+        // of milliseconds of frozen window on first paint and again on every resize — a
+        // blocked GUI thread, which is the single thing ADR-003 exists to prevent.
+        renderStrategy: Canvas.Threaded
 
         onPaint: {
             const ctx = getContext("2d");

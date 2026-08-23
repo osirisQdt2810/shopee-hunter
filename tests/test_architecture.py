@@ -82,13 +82,25 @@ def _imports(path: Path) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            names.add(node.module.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and node.level:
-            # Relative import: record the package it reaches into, so `from ..gui import x`
-            # inside services/ is visible as a gui dependency.
-            names.add(f".{node.module.split('.')[0]}" if node.module else ".")
+        elif isinstance(node, ast.ImportFrom):
+            # The FULL dotted module, not just its root, and an absolute import of our own
+            # package normalised to the relative form. Reducing to the root let
+            # `from shopee_hunter.gui.bridge import AppBridge` inside services/ resolve to
+            # "shopee_hunter" and match nothing — the rule was unenforced for every absolute
+            # self-import, which is the spelling an IDE's auto-import produces.
+            module = node.module or ""
+            if node.level:
+                names.add(f".{module}" if module else ".")
+            elif module == "shopee_hunter" or module.startswith("shopee_hunter."):
+                names.add("." + module[len("shopee_hunter") + 1 :])
+            else:
+                names.add(module)
     return names
+
+
+def _reaches(names: set[str], layer: str) -> bool:
+    """Does this file import `layer`, as a package or as any module inside it?"""
+    return any(name == f".{layer}" or name.startswith(f".{layer}.") for name in names)
 
 
 def _python_files(subpackage: str) -> list[Path]:
@@ -108,9 +120,8 @@ def test_core_is_pure(path: Path) -> None:
 @pytest.mark.parametrize("path", _python_files("core"), ids=lambda p: p.name)
 def test_core_does_not_import_siblings(path: Path) -> None:
     """core/ must not reach into any other layer of the package."""
-    relative = {name for name in _imports(path) if name.startswith(".")}
-    forbidden = {f".{layer}" for layer in (*IO_LAYERS, "gui")}
-    offenders = relative & forbidden
+    names = _imports(path)
+    offenders = [layer for layer in (*IO_LAYERS, "gui") if _reaches(names, layer)]
     assert (
         not offenders
     ), f"{path.relative_to(PACKAGE)} imports {sorted(offenders)} — core/ depends on nothing"
@@ -124,7 +135,7 @@ def test_core_does_not_import_siblings(path: Path) -> None:
 def test_io_layers_do_not_import_gui(path: Path) -> None:
     """sources/, storage/ and services/ must not depend on the GUI."""
     names = _imports(path)
-    assert ".gui" not in names and "PySide6" not in names, (
+    assert not _reaches(names, "gui") and "PySide6" not in names, (
         f"{path.relative_to(PACKAGE)} depends on the GUI layer. Orchestration must be callable "
         f"from a script (scripts/live_check.py does exactly that)."
     )
@@ -136,11 +147,15 @@ def test_gui_holds_no_deal_logic() -> None:
     The check is narrow on purpose: it looks for the *construction*, which is the thing that
     would mean the GUI decided what a deal is.
     """
-    for path in _python_files("gui"):
+    engine = PACKAGE / "core" / "deals.py"
+    for path in sorted(PACKAGE.rglob("*.py")):
+        if path == engine:
+            continue
         source = path.read_text(encoding="utf-8")
         assert not re.search(r"\bDeal\s*\(", source), (
-            f"{path.relative_to(PACKAGE)} constructs a Deal. Only core/deals.py may — the GUI "
-            f"renders verdicts, it does not make them (ADR-005)."
+            f"{path.relative_to(PACKAGE)} constructs a Deal. Only core/deals.py may — every "
+            f"other layer renders or routes verdicts, it does not make them (ADR-005). The "
+            f"scan used to cover gui/ alone, so a Deal built in services/ was unguarded."
         )
 
 
