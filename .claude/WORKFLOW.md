@@ -127,10 +127,10 @@ gh pr edit --add-label automerge      # optional: let CI merge it once green + A
 A PR touching `.github/workflows/**` used to be unreviewable, because the action's
 OIDC-to-App token exchange refuses a workflow that differs from the default branch. The
 review job now passes the action its own GITHUB_TOKEN, which skips that exchange, so those
-PRs are **reviewed** like any other. Whether they also auto-merge is a separate question and
-is not yet established — the merge step uses `GITHUB_TOKEN`, which GitHub refuses for pushes
-that touch workflow files. If the `Auto-merge` job fails on such a PR, merge it by hand; that
-is a known unknown, not a regression.
+PRs are reviewed **and merged** like any other. The merge half was an open question for a
+while, since `GITHUB_TOKEN` is refused for *pushes* that touch workflow files — but PR #1,
+which added all three of them, was merged by the `Auto-merge` job itself on 2026-08-23. The
+push restriction does not extend to the merge API.
 
 ---
 

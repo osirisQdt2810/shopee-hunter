@@ -468,9 +468,10 @@ having reviewed nothing.
   be: the action's OIDC-to-App token exchange refuses a workflow differing from the default
   branch, and refuses it by *returning*, so the job went green having reviewed nothing.
   Passing the action the workflow's own GITHUB_TOKEN skips that exchange entirely.
-- (?) Whether such a PR also **auto-merges** is unverified. `gh pr merge` runs with
-  `GITHUB_TOKEN`, which GitHub refuses for pushes that create or update workflow files; it
-  is not established that the merge API applies the same rule. Until a workflow-touching PR
-  has actually merged through the gate, assume it may need a manual merge.
+- (+) Such a PR also **auto-merges**. This was an open question — `GITHUB_TOKEN` is refused
+  for *pushes* that create or update workflow files, and it was not obvious the merge API
+  behaved differently. Settled empirically on 2026-08-23: PR #1, which added all three
+  workflow files, was merged by the `Auto-merge` job itself (merge commit `96a90d8`,
+  merged by `app/github-actions`). The push restriction does not extend to merging.
 - (−) The review is only as good as `CONVENTIONS.md`, which makes keeping that file honest
   part of the CI story rather than a documentation chore.

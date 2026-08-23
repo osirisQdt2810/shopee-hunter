@@ -24,6 +24,45 @@ Format for each entry:
 
 ---
 
+## 2026-08-23 (Sunday) — later
+
+### Done today
+- **PR #1 merged** (`96a90d8`) by the `Auto-merge` job itself, after `VERDICT: APPROVE`.
+  Five review rounds, 20 blocking findings fixed, 297 → 453 offline tests.
+- **The review gate was broken and is now fixed.** `claude-code-action` trades an OIDC token
+  for a GitHub App token unless handed a `github_token`. That trade 401s with no App
+  installed, and — worse — with the App installed it *silently returns* for any PR whose
+  workflow files differ from `main`, so the job goes green having reviewed nothing. The
+  review job now passes its own GITHUB_TOKEN and skips the exchange. `claude.yml` keeps the
+  App token deliberately: it pushes fixes, and a GITHUB_TOKEN push raises no workflow event.
+- **Agent memory moved into the repo** at `.claude/memory/`, indexed by `MEMORY.md` and
+  pointed at from CLAUDE.md, so it survives a switch between machines.
+
+### Decisions made
+- ADR-010 updated twice: the "workflow-editing PRs can never be reviewed" exception is gone,
+  and the follow-on question — whether such a PR can also auto-merge — was settled by
+  observation rather than argument when PR #1 merged itself.
+
+### What the review rounds actually caught (worth remembering)
+- Rounds returned 6, 2, 1 and 11 blocking findings. The jump is not new breakage: round 5
+  read the whole 18.7k-line change rather than the recent diff. **An APPROVE on a PR this
+  size means "no further defects found at this depth", not "none remain."**
+- Three rounds' findings were defects *in the previous round's fixes*. Twice a test I wrote
+  pinned the bug rather than the behaviour — `pytest.raises(SourceBlocked, ...)` recorded a
+  mis-typed chain aggregate as intended, and the DealCard wiring test passed against the very
+  bug it was written for because the explanatory comment contained the property's name.
+  **Verify a new test fails without its fix.** It caught both.
+- The recurring defect shape in this codebase is the silent default: `except (TypeError,
+  ValueError): x = 0`. It was fixed in the affiliate adapter, then found again in the shared
+  parser, then again in the flash path.
+
+### Next up
+- **Smaller PRs.** That is the real lesson of the five rounds.
+- A captured fixture (now unblocked: `capture_fixture.py --source browser` called a method
+  that did not exist, so it had never run), Windows hand-verification, and mypy.
+
+---
+
 ## 2026-08-23 (Sunday)
 
 ### Done today
